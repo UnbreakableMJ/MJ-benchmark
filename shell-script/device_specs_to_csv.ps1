@@ -1,46 +1,177 @@
-# MJ Benchmark Suite Auto-Logger (Windows)
-$CSVFile = "$env:USERPROFILE\MJ_benchmarks.csv"
-$RunName = $args[0]
-$ResultDir = "$env:USERPROFILE\.phoronix-test-suite\test-results\$RunName"
-$ResultJson = "$ResultDir\results.json"
+param(
+    [Parameter(Mandatory=$true)]
+    [string]$output
+)
 
-# Ensure headers exist
-if (!(Test-Path $CSVFile)) {
-  "Date,Computer,CPU,GPU,NPU,RAM,Storage,Compilation Flags,Distro,Shell,DE,Repo Level,7-Zip MIPS,OpenSSL MB/s,RAMspeed MB/s,fio Seq Read MB/s,fio Seq Write MB/s,fio Rand Read IOPS,fio Rand Write IOPS,glmark2 Score,Kernel Build Time (s),Speedometer 2.1 Score,JetStream 2.2 Score,MotionMark 1.3 Score,Notes" | Out-File $CSVFile
+# Helper: safe getter
+function Get-Safe($script) {
+    try {
+        $value = Invoke-Expression $script
+        if ($null -eq $value -or $value -eq "") { return "" }
+        return $value.ToString().Trim()
+    } catch {
+        return ""
+    }
 }
 
-# Metadata
-$Date = Get-Date -Format "yyyy/MM/dd HH:mm"
-$Computer = $env:COMPUTERNAME
-$CPU = (Get-CimInstance Win32_Processor).Name
-$GPU = (Get-CimInstance Win32_VideoController).Name
-$RAM = "{0} GB" -f ([math]::Round((Get-CimInstance Win32_PhysicalMemory | Measure-Object -Property Capacity -Sum).Sum / 1GB))
-$Storage = (Get-CimInstance Win32_DiskDrive | Select-Object -First 1).Model
-$Distro = "Windows $(Get-ComputerInfo | Select-Object -ExpandProperty WindowsVersion)"
-$Shell = "PowerShell"
-$DE = "Explorer"
+# --- Auto-detected fields ---
 
-# Manual fields
-$NPU = "None"
-$CompFlags = "(fill manually)"
-$RepoLevel = "(fill manually)"
+# Brand & Model
+$brand  = Get-Safe "(Get-CimInstance Win32_ComputerSystem).Manufacturer"
+$model  = Get-Safe "(Get-CimInstance Win32_ComputerSystem).Model"
+$brandModel = "$brand $model".Trim()
 
-# Parse PTS JSON (requires jq for Windows or PowerShell JSON parsing)
-$Results = Get-Content $ResultJson | ConvertFrom-Json
-$SevenZip = ($Results.Results | Where-Object {$_.Identifier -eq "pts/compress-7zip"}).Result
-$OpenSSL = ($Results.Results | Where-Object {$_.Identifier -eq "pts/openssl"}).Result
-$RAMSpeed = ($Results.Results | Where-Object {$_.Identifier -eq "pts/ramspeed"}).Result
-$FioSeqRead = ($Results.Results | Where-Object {$_.Identifier -eq "pts/fio"}).Result
-$Glmark2 = ($Results.Results | Where-Object {$_.Identifier -eq "pts/glmark2"}).Result
-$KernelBuild = ($Results.Results | Where-Object {$_.Identifier -eq "pts/build-linux-kernel"}).Result
+# CPU
+$cpu = Get-Safe "(Get-CimInstance Win32_Processor).Name"
+$cpuSpeed = Get-Safe "(Get-CimInstance Win32_Processor).MaxClockSpeed"
+if ($cpuSpeed -ne "") { $cpuSpeed = [math]::Round($cpuSpeed/1000,2).ToString() + ' GHz' }
 
-# Browser tests (manual entry for now)
-$Speedometer = "(fill)"
-$JetStream = "(fill)"
-$MotionMark = "(fill)"
-$Notes = "(fill)"
+# Codename (not exposed on Windows)
+$codename = ""
 
-# Append row
-"$Date,$Computer,$CPU,$GPU,$NPU,$RAM,$Storage,$CompFlags,$Distro,$Shell,$DE,$RepoLevel,$SevenZip,$OpenSSL,$RAMSpeed,$FioSeqRead,,,,$Glmark2,$KernelBuild,$Speedometer,$JetStream,$MotionMark,$Notes" | Add-Content $CSVFile
+# x86-64 level (not exposed)
+$x86 = ""
 
-Write-Output "✅ Benchmark metadata + PTS results appended to $CSVFile"
+# GPU
+$gpu = Get-Safe "(Get-CimInstance Win32_VideoController | Select-Object -First 1).Name"
+
+# AI/NPU (Windows does not expose this)
+$ai = ""
+
+# RAM
+$ramGB = Get-Safe "([math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB,2)).ToString() + ' GB'"
+
+# Storage
+$storage = (Get-CimInstance Win32_DiskDrive | ForEach-Object {
+    $sizeGB = [math]::Round($_.Size / 1GB,2)
+    "$($_.Model) $sizeGB GB"
+}) -join "; "
+
+# Connectivity
+$wifi = Get-Safe "(Get-NetAdapter | Where-Object {$_.Status -eq 'Up'} | Select-Object -First 1).Name"
+$connectivity = $wifi
+
+# Audio ports
+$audio = Get-Safe "(Get-CimInstance Win32_SoundDevice | Select-Object -First 1).Name"
+
+# Battery info (Windows)
+$battery = Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue
+if ($battery) {
+    $batFull   = ""   # Windows does not expose full capacity directly
+    $batDesign = ""   # Windows does not expose design capacity directly
+    $batHealth = ""   # Cannot compute without design capacity
+    $batCycles = ""   # Windows does not expose cycle count
+    $batteryRaw = "Battery Present"
+} else {
+    $batteryRaw = ""
+    $batFull = ""
+    $batDesign = ""
+    $batHealth = ""
+    $batCycles = ""
+}
+
+# Power supply
+$power = Get-Safe "(Get-CimInstance Win32_Battery).BatteryStatus"
+
+# Qi wireless charging (not detectable)
+$qi = ""
+
+# Form factor
+$form = Get-Safe "(Get-CimInstance Win32_SystemEnclosure).ChassisTypes"
+if ($form -is [array]) { $form = $form[0] }
+
+# Dimensions & Weight (not exposed)
+$dimensions = ""
+
+# Display
+$display = Get-Safe "(Get-CimInstance Win32_VideoController | Select-Object -First 1).VideoModeDescription"
+
+# Build & Durability
+$build = $brand
+
+# Cameras
+$cameras = (Get-CimInstance Win32_PnPEntity | Where-Object {$_.Name -like '*Camera*'} | Select-Object -ExpandProperty Name) -join "; "
+
+# Biometrics
+$biometrics = (Get-CimInstance Win32_PnPEntity | Where-Object {$_.Name -like '*Fingerprint*'} | Select-Object -ExpandProperty Name) -join "; "
+
+# Regional
+$regional = (Get-WinSystemLocale).Name
+
+# Software & Updates
+$os = (Get-CimInstance Win32_OperatingSystem).Caption
+$kernel = (Get-CimInstance Win32_OperatingSystem).Version
+$software = "$os ($kernel)"
+
+# Color (not detectable)
+$color = ""
+
+# Upgrade options (not detectable)
+$upgrade = ""
+
+# Ecosystem lock-in (not detectable)
+$ecosystem = ""
+
+# Wear detection (not applicable)
+$wear = ""
+
+# Touch control (detect touch screen)
+$touch = Get-Safe "(Get-CimInstance Win32_PnPEntity | Where-Object {$_.Name -like '*Touch*'} | Select-Object -First 1).Name"
+
+# Storage case (not applicable)
+$storageCase = ""
+
+# Special features
+$special = ""
+
+# Official site
+$official = ""
+
+# Info links
+$links = ""
+
+# BIOS key (not detectable)
+$biosKey = ""
+
+# --- Compose CSV row in EXACT schema order ---
+$row = @(
+    $brandModel,
+    "", # Launch Date
+    "", # Price
+    $cpu,
+    $codename,
+    $cpuSpeed,
+    $x86,
+    $gpu,
+    $ai,
+    "$ramGB / $storage",
+    $connectivity,
+    $audio,
+    "", # NFC & Wallet
+    $batteryRaw,
+    $power,
+    $qi,
+    $form,
+    $dimensions,
+    $display,
+    $build,
+    $cameras,
+    $biometrics,
+    $regional,
+    $software,
+    $color,
+    $upgrade,
+    $ecosystem,
+    $wear,
+    $touch,
+    $storageCase,
+    $special,
+    $official,
+    $links,
+    $biosKey
+) -join ","
+
+# Write output
+Set-Content -Path $output -Value $row
+
+Write-Host "Device specs written to $output"
