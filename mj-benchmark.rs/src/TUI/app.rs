@@ -5,15 +5,14 @@ use std::time::Duration;
 use crossterm::{
     execute,
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
+    event::{KeyCode, KeyModifiers},
 };
 use ratatui::{
     backend::CrosstermBackend,
     Terminal,
 };
-use crossterm::event::KeyCode;
 
 use crate::{
-    platform::Platform,
     collect_specs,
     pts,
     browser_bench,
@@ -22,10 +21,12 @@ use crate::{
     google_sheets,
     google_drive,
 };
-use crate::model::{DeviceSpecs, BenchResults};
 
-use super::{state::{TuiState, PipelineStep}, ui::draw};
-use super::events::TuiEvent;
+use super::{
+    state::{TuiState, PipelineStep},
+    ui::draw,
+    events::{poll_event, TuiEvent},
+};
 
 pub async fn run_full_pipeline_with_tui(
     sheet_id: &str,
@@ -34,15 +35,15 @@ pub async fn run_full_pipeline_with_tui(
     client_id: &str,
     client_secret: &str,
 ) -> Result<(), Box<dyn Error>> {
-    // Setup terminal
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     terminal::enable_raw_mode()?;
+
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
-    let res = run_tui_loop(
+    let res = run_loop(
         &mut terminal,
         sheet_id,
         drive_folder_id,
@@ -52,7 +53,6 @@ pub async fn run_full_pipeline_with_tui(
     )
     .await;
 
-    // Restore terminal
     terminal::disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
@@ -60,7 +60,7 @@ pub async fn run_full_pipeline_with_tui(
     res
 }
 
-async fn run_tui_loop<B: ratatui::backend::Backend>(
+async fn run_loop<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     sheet_id: &str,
     drive_folder_id: &str,
@@ -70,120 +70,128 @@ async fn run_tui_loop<B: ratatui::backend::Backend>(
 ) -> Result<(), Box<dyn Error>> {
     let mut state = TuiState::new();
     let platform = crate::platform::detect_platform();
+    let tick_rate = Duration::from_millis(200);
+    let mut pipeline_done = false;
 
     state.log(format!("Platform: {}", platform));
-
-    // Pipeline runs in this function sequentially, UI refreshes every tick
-    let mut pipeline_done = false;
-    let tick_rate = Duration::from_millis(200);
-
-    // Pre-run: get Google token early so we can fail fast
     state.log("Authenticating with Google…");
     let token = google_auth::get_token(client_id, client_secret).await?;
-    state.log("Google auth OK.");
+    state.log("Google authentication successful.");
 
     loop {
         terminal.draw(|f| draw(f, &state))?;
 
         if !pipeline_done {
-            // Run pipeline step-by-step in this loop
             match state.current_step {
                 PipelineStep::Specs => {
                     state.log("Collecting device specs…");
-                    let specs: DeviceSpecs = collect_specs(platform);
-                    state.specs = Some(specs);
+                    state.specs = Some(collect_specs(platform));
                     state.set_step(PipelineStep::Pts);
                 }
                 PipelineStep::Pts => {
                     state.log("Running PTS benchmarks…");
                     pts::ensure_pts_installed()?;
                     pts::ensure_suite_exists()?;
-                    let bench = pts::run_suite()?;
-                    state.bench = Some(bench);
+                    state.bench = Some(pts::run_suite()?);
                     state.set_step(PipelineStep::Browser);
                 }
                 PipelineStep::Browser => {
-                    state.log("Running browser benchmarks (WebDriver must be running)…");
+                    state.log("Running browser benchmarks…");
                     let browser = browser_bench::run_browser_benchmarks().await;
-                    if let Some(ref mut bench) = state.bench {
-                        bench.speedometer_score = browser.speedometer;
-                        bench.jetstream_score = browser.jetstream;
-                        bench.motionmark_score = browser.motionmark;
+                    if let Some(b) = &mut state.bench {
+                        b.speedometer_score = browser.speedometer;
+                        b.jetstream_score = browser.jetstream;
+                        b.motionmark_score = browser.motionmark;
                     }
                     state.set_step(PipelineStep::Csv);
                 }
                 PipelineStep::Csv => {
-                    state.log("Building CSV row…");
-                    if let (Some(specs), Some(bench)) = (&state.specs, &state.bench) {
-                        let row = csv_row::build_csv_row(specs, bench);
-                        csv_row::append_to_csv(csv_path, &row)?;
-                        state.log(format!("CSV written to {}", csv_path));
-
-                        state.log("Uploading row to Google Sheets…");
-                        google_sheets::append_row(sheet_id, &row, &token).await?;
-                        state.log("Row appended to Google Sheets.");
-
-                        state.set_step(PipelineStep::Sheets);
-                    } else {
-                        state.log("ERROR: specs or bench missing before CSV step.");
-                        state.set_step(PipelineStep::Done);
-                    }
+                    state.log("Writing CSV and syncing Sheets…");
+                    let row = csv_row::build_csv_row(
+                        state.specs.as_ref().unwrap(),
+                        state.bench.as_ref().unwrap(),
+                    );
+                    csv_row::append_to_csv(csv_path, &row)?;
+                    google_sheets::append_row(sheet_id, &row, &token).await?;
+                    state.set_step(PipelineStep::Sheets);
                 }
                 PipelineStep::Sheets => {
                     state.log("Uploading CSV to Google Drive…");
                     google_drive::upload_csv(drive_folder_id, csv_path, &token).await?;
-                    state.log("CSV uploaded to Google Drive.");
                     state.set_step(PipelineStep::Drive);
                 }
                 PipelineStep::Drive => {
                     state.log("Pipeline complete.");
                     state.set_step(PipelineStep::Done);
                 }
-                PipelineStep::Done => {
-                    pipeline_done = true;
-                }
+                PipelineStep::Done => pipeline_done = true,
             }
         }
 
-        // Handle input / ticks
-        if let Some(ev) = super::events::poll_event(tick_rate) {
+        if let Some(ev) = poll_event(tick_rate) {
             match ev {
-                TuiEvent::Tick => {
-                    // could animate progress, etc.
+                TuiEvent::Tick => {}
+                TuiEvent::Key(key) => {
+                    if state.in_search_mode {
+                        match key {
+                            KeyCode::Esc => state.cancel_search(),
+                            KeyCode::Enter => state.finalize_search(),
+                            KeyCode::Backspace => state.pop_search_char(),
+                            KeyCode::Char(c) => state.push_search_char(c),
+                            _ => {}
+                        }
+                        continue;
+                    }
+
+                    match key {
+                        KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+
+                        KeyCode::Char(':') => {
+                            if let Some(TuiEvent::Key(KeyCode::Char('q'))) =
+                                poll_event(Duration::from_millis(50))
+                            {
+                                return Ok(());
+                            }
+                        }
+
+                        KeyCode::Char('Z') => {
+                            if let Some(TuiEvent::Key(KeyCode::Char('Z'))) =
+                                poll_event(Duration::from_millis(50))
+                            {
+                                return Ok(());
+                            }
+                        }
+
+                        KeyCode::Up | KeyCode::Char('k') => state.scroll_up(),
+                        KeyCode::Down | KeyCode::Char('j') => state.scroll_down(),
+                        KeyCode::PageUp => state.scroll_page_up(),
+                        KeyCode::PageDown => state.scroll_page_down(),
+
+                        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                            state.scroll_half_page_up(),
+                        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                            state.scroll_half_page_down(),
+
+                        KeyCode::Char('g') => {
+                            if let Some(TuiEvent::Key(KeyCode::Char('g'))) =
+                                poll_event(Duration::from_millis(50))
+                            {
+                                state.scroll_to_top();
+                            }
+                        }
+
+                        KeyCode::Char('G') => state.scroll_to_bottom(),
+
+                        KeyCode::Tab | KeyCode::Char('h') | KeyCode::Char('l') =>
+                            state.toggle_panel(),
+
+                        KeyCode::Char('/') => state.start_search(),
+                        KeyCode::Char('n') => state.search_next(),
+                        KeyCode::Char('N') => state.search_prev(),
+
+                        _ => {}
+                    }
                 }
-                TuiEvent::Key(key) => match key {
-                    // Quit
-                    KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-
-                    // Vim-style :q
-                    KeyCode::Char(':') => {
-                        if let Some(TuiEvent::Key(KeyCode::Char('q'))) =
-                            super::events::poll_event(Duration::from_millis(50))
-                        {
-                            return Ok(());
-                        }
-                    }
-
-                    // Vim-style ZZ
-                    KeyCode::Char('Z') => {
-                        if let Some(TuiEvent::Key(KeyCode::Char('Z'))) =
-                            super::events::poll_event(Duration::from_millis(50))
-                        {
-                            return Ok(());
-                        }
-                    }
-
-                    // Scroll (arrow keys + vim keys)
-                    KeyCode::Up | KeyCode::Char('k') => state.scroll_up(),
-                    KeyCode::Down | KeyCode::Char('j') => state.scroll_down(),
-
-                    // Switch panel (Tab + vim h/l)
-                    KeyCode::Tab | KeyCode::Char('h') | KeyCode::Char('l') => {
-                        state.toggle_panel()
-                    }
-
-                    _ => {}
-                },
             }
         }
     }
