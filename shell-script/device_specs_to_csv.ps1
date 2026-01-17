@@ -1,5 +1,8 @@
-# MJ Benchmark Suite Logger
+# MJ Benchmark Suite Auto-Logger (Windows)
 $CSVFile = "$env:USERPROFILE\MJ_benchmarks.csv"
+$RunName = $args[0]
+$ResultDir = "$env:USERPROFILE\.phoronix-test-suite\test-results\$RunName"
+$ResultJson = "$ResultDir\results.json"
 
 # Ensure headers exist
 if (!(Test-Path $CSVFile)) {
@@ -22,22 +25,22 @@ $NPU = "None"
 $CompFlags = "(fill manually)"
 $RepoLevel = "(fill manually)"
 
-# Benchmark results (fill manually or parse from PTS export)
-$SevenZip = "(fill)"
-$OpenSSL = "(fill)"
-$RAMSpeed = "(fill)"
-$FioSeqRead = "(fill)"
-$FioSeqWrite = "(fill)"
-$FioRandRead = "(fill)"
-$FioRandWrite = "(fill)"
-$Glmark2 = "(fill)"
-$KernelBuild = "(fill)"
+# Parse PTS JSON (requires jq for Windows or PowerShell JSON parsing)
+$Results = Get-Content $ResultJson | ConvertFrom-Json
+$SevenZip = ($Results.Results | Where-Object {$_.Identifier -eq "pts/compress-7zip"}).Result
+$OpenSSL = ($Results.Results | Where-Object {$_.Identifier -eq "pts/openssl"}).Result
+$RAMSpeed = ($Results.Results | Where-Object {$_.Identifier -eq "pts/ramspeed"}).Result
+$FioSeqRead = ($Results.Results | Where-Object {$_.Identifier -eq "pts/fio"}).Result
+$Glmark2 = ($Results.Results | Where-Object {$_.Identifier -eq "pts/glmark2"}).Result
+$KernelBuild = ($Results.Results | Where-Object {$_.Identifier -eq "pts/build-linux-kernel"}).Result
+
+# Browser tests (manual entry for now)
 $Speedometer = "(fill)"
 $JetStream = "(fill)"
 $MotionMark = "(fill)"
 $Notes = "(fill)"
 
 # Append row
-"$Date,$Computer,$CPU,$GPU,$NPU,$RAM,$Storage,$CompFlags,$Distro,$Shell,$DE,$RepoLevel,$SevenZip,$OpenSSL,$RAMSpeed,$FioSeqRead,$FioSeqWrite,$FioRandRead,$FioRandWrite,$Glmark2,$KernelBuild,$Speedometer,$JetStream,$MotionMark,$Notes" | Add-Content $CSVFile
+"$Date,$Computer,$CPU,$GPU,$NPU,$RAM,$Storage,$CompFlags,$Distro,$Shell,$DE,$RepoLevel,$SevenZip,$OpenSSL,$RAMSpeed,$FioSeqRead,,,,$Glmark2,$KernelBuild,$Speedometer,$JetStream,$MotionMark,$Notes" | Add-Content $CSVFile
 
-Write-Output "✅ Benchmark metadata appended to $CSVFile"
+Write-Output "✅ Benchmark metadata + PTS results appended to $CSVFile"
