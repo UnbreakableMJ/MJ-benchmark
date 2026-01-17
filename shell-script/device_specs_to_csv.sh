@@ -1,50 +1,82 @@
 #!/usr/bin/env bash
+# MJ Device Spec Auto-Collector → CSV Appender
+# Appends a single row into your master device matrix CSV
 
-# MJ Benchmark Suite Auto-Logger
-# Collect metadata + parse PTS results + append into CSV
+set -euo pipefail
 
-CSV_FILE="$HOME/MJ_benchmarks.csv"
-RUN_NAME=$1   # pass the PTS run name as argument
+CSV_FILE="$HOME/device_specs.csv"
 
-# Ensure CSV has headers if new
+# Helper: safe command execution
+get() {
+    CMD="$1"
+    OUTPUT=$(bash -c "$CMD" 2>/dev/null | head -n 1 | xargs)
+    [ -z "$OUTPUT" ] && echo "" || echo "$OUTPUT"
+}
+
+# Ensure CSV header exists
 if [ ! -f "$CSV_FILE" ]; then
-  echo "Date,Computer,CPU,GPU,NPU,RAM,Storage,Compilation Flags,Distro,Shell,DE,Repo Level,7-Zip MIPS,OpenSSL MB/s,RAMspeed MB/s,fio Seq Read MB/s,fio Seq Write MB/s,fio Rand Read IOPS,fio Rand Write IOPS,glmark2 Score,Kernel Build Time (s),Speedometer 2.1 Score,JetStream 2.2 Score,MotionMark 1.3 Score,Notes" > "$CSV_FILE"
+    echo "Brand & Model,Launch Date,Price,CPU & Performance,Codename,CPU Speed,x86-64 Level,GPU,AI & NPU,RAM & Storage,Connectivity,Audio Ports,NFC & Wallet,Battery,Power & Charging,Qi Wireless Charging,Form Factor,Dimensions & Weight,Display,Build & Durability,Cameras,Biometrics & Health,Regional,Software & Updates,Color,Upgrade Options,Ecosystem Lock-in,Wear Detection,Touch Control,Storage Case,Special Features,Official Site,Info Links,BIOS/Boot Key" > "$CSV_FILE"
 fi
 
-# Metadata
-DATE=$(date +"%Y/%m/%d %H:%M")
-COMPUTER=$(hostname)
-CPU=$(lscpu | grep "Model name" | sed 's/Model name:\s*//')
-GPU=$(lspci | grep -i 'vga' | sed 's/.*controller: //')
-RAM=$(free -h | awk '/Mem:/ {print $2}')
-STORAGE=$(lsblk -d -o NAME,SIZE,TYPE | grep disk | awk '{print $1 " " $2}')
-DISTRO=$(lsb_release -d 2>/dev/null | cut -f2 || grep PRETTY_NAME /etc/os-release | cut -d= -f2 | tr -d '"')
-SHELL=$SHELL
-DE=$XDG_CURRENT_DESKTOP
+# --- Auto-detected fields ---
+BRAND_MODEL=$(get "hostnamectl | grep 'Model' | cut -d: -f2")
+[ -z "$BRAND_MODEL" ] && BRAND_MODEL=$(get "cat /sys/devices/virtual/dmi/id/product_name")
 
-# Manual fields
-NPU="None"
-COMP_FLAGS="(fill manually)"
-REPO_LEVEL="(fill manually)"
+CPU=$(get "lscpu | grep 'Model name' | sed 's/Model name:\\s*//'")
+CPU_SPEED=$(get "lscpu | grep 'CPU max MHz' | awk '{printf \"%.2f GHz\", \$4/1000}'")
+CPU_SPEED=${CPU_SPEED:-$(get "lscpu | grep 'CPU MHz' | awk '{printf \"%.2f GHz\", \$3/1000}'")}
 
-# Parse PTS JSON results
-RESULT_DIR="$HOME/.phoronix-test-suite/test-results/$RUN_NAME"
-RESULT_JSON="$RESULT_DIR/results.json"
+CODENAME=$(get "lscpu | grep 'Vendor ID' | awk '{print \$3}'")
+X86_LEVEL=$(get "lscpu | grep -i 'x86-64' | awk '{print \$2}'")
 
-SEVENZIP=$(jq -r '.Results[] | select(.Identifier=="pts/compress-7zip") | .Result' $RESULT_JSON)
-OPENSSL=$(jq -r '.Results[] | select(.Identifier=="pts/openssl") | .Result' $RESULT_JSON)
-RAMSPEED=$(jq -r '.Results[] | select(.Identifier=="pts/ramspeed") | .Result' $RESULT_JSON)
-FIO_SEQ_READ=$(jq -r '.Results[] | select(.Identifier=="pts/fio") | .Result' $RESULT_JSON)
-GLMARK2=$(jq -r '.Results[] | select(.Identifier=="pts/glmark2") | .Result' $RESULT_JSON)
-KERNEL_BUILD=$(jq -r '.Results[] | select(.Identifier=="pts/build-linux-kernel") | .Result' $RESULT_JSON)
+GPU=$(get "lspci | grep -i 'vga' | sed 's/.*controller: //'")
 
-# Browser tests (manual entry for now)
-SPEEDOMETER="(fill)"
-JETSTREAM="(fill)"
-MOTIONMARK="(fill)"
-NOTES="(fill)"
+RAM=$(get "free -h | awk '/Mem:/ {print \$2}'")
+STORAGE=$(get "lsblk -d -o NAME,SIZE,TYPE | grep disk | awk '{print \$1 \" \" \$2}' | paste -sd '; '")
+
+CONNECTIVITY=$(get "nmcli -t -f WIFI g")
+CONNECTIVITY+="; $(get "lsusb | grep -i 'usb' | head -n 1")"
+
+AUDIO_PORTS=$(get "amixer info | grep -i card")
+
+BATTERY=$(get "upower -i /org/freedesktop/UPower/devices/battery_BAT0 | grep -E 'energy-full|capacity' | xargs")
+POWER_SUPPLY=$(get "cat /sys/class/power_supply/AC/online 2>/dev/null")
+
+DIMENSIONS=$(get "cat /sys/devices/virtual/dmi/id/chassis_type")
+DISPLAY=$(get "xrandr --current | grep '*' | awk '{print \$1}' | head -n 1")
+
+BUILD=$(get "cat /sys/devices/virtual/dmi/id/chassis_vendor")
+BIOMETRICS=$(get "lsusb | grep -i 'fingerprint'")
+
+DISTRO=$(get "grep PRETTY_NAME /etc/os-release | cut -d= -f2 | tr -d '\"'")
+KERNEL=$(get "uname -r")
+
+UPGRADE_OPTIONS=$(get "lsblk -o NAME,TYPE | grep disk")
+
+BIOS_KEY=""  # Not detectable automatically
+
+# --- Manual / non-detectable fields (left blank) ---
+LAUNCH_DATE=""
+PRICE=""
+AI_NPU=""
+NFC=""
+QI=""
+FORM_FACTOR=""
+CAMERAS=""
+REGIONAL=""
+COLOR=""
+ECOSYSTEM=""
+WEAR_DETECTION=""
+TOUCH_CONTROL=""
+STORAGE_CASE=""
+SPECIAL=""
+OFFICIAL=""
+LINKS=""
+
+# --- Compose CSV row ---
+ROW="$BRAND_MODEL,$LAUNCH_DATE,$PRICE,$CPU,$CODENAME,$CPU_SPEED,$X86_LEVEL,$GPU,$AI_NPU,$RAM / $STORAGE,$CONNECTIVITY,$AUDIO_PORTS,$NFC,$BATTERY,$POWER_SUPPLY,$QI,$FORM_FACTOR,$DIMENSIONS,$DISPLAY,$BUILD,$CAMERAS,$BIOMETRICS,$REGIONAL,$DISTRO ($KERNEL),$COLOR,$UPGRADE_OPTIONS,$ECOSYSTEM,$WEAR_DETECTION,$TOUCH_CONTROL,$STORAGE_CASE,$SPECIAL,$OFFICIAL,$LINKS,$BIOS_KEY"
 
 # Append row
-echo "$DATE,$COMPUTER,$CPU,$GPU,$NPU,$RAM,$STORAGE,$COMP_FLAGS,$DISTRO,$SHELL,$DE,$REPO_LEVEL,$SEVENZIP,$OPENSSL,$RAMSPEED,$FIO_SEQ_READ,,,$GLMARK2,$KERNEL_BUILD,$SPEEDOMETER,$JETSTREAM,$MOTIONMARK,$NOTES" >> "$CSV_FILE"
+echo "$ROW" >> "$CSV_FILE"
 
-echo "✅ Benchmark metadata + PTS results appended to $CSV_FILE"
+echo "✅ Device specs appended to $CSV_FILE"
