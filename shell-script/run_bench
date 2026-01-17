@@ -1,31 +1,36 @@
 #!/usr/bin/env bash
-# MJ Unified Benchmark Pipeline
-# Device Specs + PTS + Browser Benchmarks → One CSV Row
+# MJ Unified Benchmark Runner
+# Collects device specs + benchmarks → merges → appends to master CSV
 
 set -euo pipefail
 
-CSV_FILE="$HOME/MJ_benchmarks.csv"
+CSV_FILE="$HOME/mj_benchmarks.csv"
 SPECS_TMP="$HOME/.device_specs_tmp.csv"
 BENCH_TMP="$HOME/.bench_results_tmp.csv"
 
-# 1. Collect device specs
+# --- 1. Collect device specs (one CSV row, no header) ---
+echo "Collecting device specs..."
 bash "$HOME/device_specs_to_csv.sh" --output "$SPECS_TMP"
 
-# 2. Run unified Python benchmark pipeline
-python3 "$HOME/MJ_pipeline.py" --output "$BENCH_TMP"
+# --- 2. Run benchmark pipeline (one CSV row, no header) ---
+echo "Running benchmark suite..."
+python3 "$HOME/mj_pipeline.py" --output "$BENCH_TMP"
 
-# 3. Ensure master CSV exists
+# --- 3. Ensure master CSV exists with correct header ---
 if [ ! -f "$CSV_FILE" ]; then
-    echo "Brand & Model,Launch Date,Price,CPU & Performance,Codename,CPU Speed,x86-64 Level,GPU,AI & NPU,RAM & Storage,Connectivity,Audio Ports,NFC & Wallet,Battery,Power & Charging,Qi Wireless Charging,Form Factor,Dimensions & Weight,Display,Build & Durability,Cameras,Biometrics & Health,Regional,Software & Updates,Color,Upgrade Options,Ecosystem Lock-in,Wear Detection,Touch Control,Storage Case,Special Features,Official Site,Info Links,BIOS/Boot Key,7-Zip MIPS,OpenSSL MB/s,RAMspeed MB/s,fio Seq Read MB/s,fio Seq Write MB/s,fio Rand Read IOPS,fio Rand Write IOPS,glmark2 Score,Kernel Build Time (s),Speedometer 2.1 Score,JetStream 2.2 Score,MotionMark 1.3 Score,Notes" > "$CSV_FILE"
+    echo "Creating master CSV with header..."
+    echo "Brand & Model,Launch Date,Price,CPU & Performance,Codename,CPU Speed,x86-64 Level,GPU,AI & NPU,RAM & Storage,Connectivity,Audio Ports,NFC & Wallet,Battery,Power & Charging,Qi Wireless Charging,Form Factor,Dimensions & Weight,Display,Build & Durability,Cameras,Biometrics & Health,Regional,Software & Updates,Color,Upgrade Options,Ecosystem Lock-in,Wear Detection,Touch Control,Storage Case,Special Features,Official Site,Info Links,BIOS/Boot Key,7-Zip MIPS,OpenSSL MB/s,RAMspeed MB/s,fio Seq Read MB/s,fio Seq Write MB/s,fio Rand Read IOPS,fio Rand Write IOPS,glmark2 Score,Kernel Build Time (s),Speedometer 2.1 Score,JetStream 2.2 Score,MotionMark 1.3 Score,Battery Full Capacity (Wh),Battery Design Capacity (Wh),Battery Health (%),Battery Cycle Count,Notes" > "$CSV_FILE"
 fi
 
-# 4. Merge specs + benchmark results into one row
+# --- 4. Merge both rows into one unified CSV entry ---
+echo "Merging results..."
 ROW="$(cat "$SPECS_TMP"),$(cat "$BENCH_TMP")"
 
-# 5. Append to master CSV
+# --- 5. Append to master CSV ---
 echo "$ROW" >> "$CSV_FILE"
 
-# 6. Cleanup
+# --- 6. Cleanup ---
 rm -f "$SPECS_TMP" "$BENCH_TMP"
 
-echo "✅ Full benchmark + device specs appended to $CSV_FILE"
+echo "✅ Benchmark entry appended to $CSV_FILE"
+echo "Done."
