@@ -1,157 +1,243 @@
-use clap::{Parser, Subcommand};
-use std::error::Error;
+use std::process::Command;
+use std::fs;
 
-mod platform;
-mod install;
-mod specs_linux;
-mod pts;
-mod model;
-mod csv_row;
-mod google_auth;
-mod google_sheets;
-mod google_drive;
+use crate::model::DeviceSpecs;
 
-use platform::Platform;
-use model::{DeviceSpecs, BenchResults};
-
-#[derive(Parser, Debug)]
-#[command(author, version, about)]
-struct Cli {
-    #[command(subcommand)]
-    command: Commands,
+fn run(cmd: &str, args: &[&str]) -> Option<String> {
+    let out = Command::new(cmd).args(args).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
-#[derive(Subcommand, Debug)]
-enum Commands {
-    /// Detect OS/distro and install dependencies
-    Install {
-        #[arg(long)]
-        execute: bool,
-    },
+pub fn collect_macos_specs() -> DeviceSpecs {
+    let brand_model = detect_brand_model();
+    let cpu = detect_cpu();
+    let cpu_speed = detect_cpu_speed();
+    let x86_level = detect_arch();
+    let ram_storage = format!("{} / {}", detect_ram(), detect_storage());
+    let gpu = detect_gpu();
+    let connectivity = detect_connectivity();
+    let audio_ports = detect_audio();
+    let display = detect_display();
+    let battery = detect_battery();
+    let power_charging = detect_power();
+    let cameras = detect_cameras();
+    let biometrics_health = detect_biometrics();
+    let regional = detect_locale();
+    let software_updates = detect_os_version();
 
-    /// Run full pipeline: specs + benchmarks + CSV + sync
-    Run {
-        #[arg(long)]
-        sheet_id: String,
-        #[arg(long)]
-        drive_folder_id: String,
-        #[arg(long, default_value = "mj_benchmarks.csv")]
-        csv_path: String,
-        #[arg(long)]
-        client_id: String,
-        #[arg(long)]
-        client_secret: String,
-    },
-
-    Detect,
-    PlanInstall,
+    DeviceSpecs {
+        brand_model,
+        launch_date: "".into(),
+        price: "".into(),
+        cpu,
+        codename: "".into(),
+        cpu_speed,
+        x86_level,
+        gpu,
+        ai_npu: "".into(), // Apple Neural Engine could be detected later
+        ram_storage,
+        connectivity,
+        audio_ports,
+        nfc_wallet: "Apple Pay capable (assumed)".into(),
+        battery,
+        power_charging,
+        qi_charging: "".into(),
+        form_factor: detect_form_factor(),
+        dimensions_weight: "".into(),
+        display,
+        build_durability: "Aluminium chassis (likely)".into(),
+        cameras,
+        biometrics_health,
+        regional,
+        software_updates,
+        color: "".into(),
+        upgrade_options: "Most Apple devices have limited upgrade options".into(),
+        ecosystem_lock_in: "Apple ecosystem".into(),
+        wear_detection: "".into(),
+        touch_control: "".into(),
+        storage_case: "".into(),
+        special_features: "".into(),
+        official_site: "https://www.apple.com/mac/".into(),
+        info_links: "".into(),
+        bios_boot_key: "Option (⌥) key at boot".into(),
+    }
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    let cli = Cli::parse();
+fn detect_brand_model() -> String {
+    if let Some(sp) = run("system_profiler", &["SPHardwareDataType"]) {
+        let mut model = "Unknown Mac".to_string();
+        let mut identifier = String::new();
 
-    match cli.command {
-        Commands::Detect => {
-            println!("Detected platform: {}", platform::detect_platform());
-        }
-
-        Commands::PlanInstall => {
-            let p = platform::detect_platform();
-            println!("Detected platform: {}", p);
-            install::print_install_plan(p);
-        }
-
-        Commands::Install { execute } => {
-            let p = platform::detect_platform();
-            println!("Detected platform: {}", p);
-            if execute {
-                install::run_install(p)?;
-            } else {
-                install::print_install_plan(p);
+        for line in sp.lines() {
+            let l = line.trim();
+            if l.starts_with("Model Name:") {
+                model = l.split(':').nth(1).unwrap_or("").trim().to_string();
+            } else if l.starts_with("Model Identifier:") {
+                identifier = l.split(':').nth(1).unwrap_or("").trim().to_string();
             }
         }
 
-        Commands::Run {
-            sheet_id,
-            drive_folder_id,
-            csv_path,
-            client_id,
-            client_secret,
-        } => {
-            run_full_pipeline(
-                &sheet_id,
-                &drive_folder_id,
-                &csv_path,
-                &client_id,
-                &client_secret,
-            )
-            .await?;
+        if identifier.is_empty() {
+            model
+        } else {
+            format!("{} ({})", model, identifier)
         }
+    } else {
+        "Unknown Mac".into()
     }
-
-    Ok(())
 }
 
-async fn run_full_pipeline(
-    sheet_id: &str,
-    drive_folder_id: &str,
-    csv_path: &str,
-    client_id: &str,
-    client_secret: &str,
-) -> Result<(), Box<dyn Error>> {
-    let platform = platform::detect_platform();
-    println!("== Platform: {} ==", platform);
-
-    // 1. Collect specs
-    println!("== Collecting device specs ==");
-    let specs = match platform {
-        Platform::DebianLike
-        | Platform::FedoraLike
-        | Platform::ArchLike
-        | Platform::Nix
-        | Platform::FreeBsd
-        | Platform::NetBsd
-        | Platform::OpenBsd
-        | Platform::MacOs => specs_linux::collect_linux_specs(),
-
-        Platform::Windows => {
-            println!("Windows specs not implemented yet.");
-            DeviceSpecs::dummy()
+fn detect_cpu() -> String {
+    // Try sysctl first
+    if let Some(out) = run("sysctl", &["-n", "machdep.cpu.brand_string"]) {
+        return out.trim().to_string();
+    }
+    // Fallback to system_profiler
+    if let Some(sp) = run("system_profiler", &["SPHardwareDataType"]) {
+        for line in sp.lines() {
+            let l = line.trim();
+            if l.starts_with("Processor Name:") || l.starts_with("Chip:") {
+                return l.split(':').nth(1).unwrap_or("").trim().to_string();
+            }
         }
+    }
+    "Unknown CPU".into()
+}
 
-        Platform::Unknown => {
-            println!("Unknown platform; using dummy specs.");
-            DeviceSpecs::dummy()
+fn detect_cpu_speed() -> String {
+    if let Some(sp) = run("system_profiler", &["SPHardwareDataType"]) {
+        for line in sp.lines() {
+            let l = line.trim();
+            if l.starts_with("Processor Speed:") {
+                return l.split(':').nth(1).unwrap_or("").trim().to_string();
+            }
         }
-    };
+    }
+    "".into()
+}
 
-    // 2. Run PTS
-    println!("== Running PTS benchmarks ==");
-    pts::ensure_pts_installed()?;
-    pts::ensure_suite_exists()?;
-    let bench = pts::run_suite()?;
+fn detect_arch() -> String {
+    if let Some(out) = run("uname", &["-m"]) {
+        out.trim().to_string()
+    } else {
+        "".into()
+    }
+}
 
-    // 3. Build CSV row
-    println!("== Building CSV row ==");
-    let row = csv_row::build_csv_row(&specs, &bench);
+fn detect_ram() -> String {
+    if let Some(sp) = run("system_profiler", &["SPHardwareDataType"]) {
+        for line in sp.lines() {
+            let l = line.trim();
+            if l.starts_with("Memory:") {
+                return l.split(':').nth(1).unwrap_or("").trim().to_string();
+            }
+        }
+    }
+    "Unknown RAM".into()
+}
 
-    // 4. Save CSV
-    println!("== Writing CSV to {} ==", csv_path);
-    csv_row::append_to_csv(csv_path, &row)?;
+fn detect_storage() -> String {
+    // Basic: use diskutil list
+    if let Some(out) = run("diskutil", &["list"]) {
+        return out;
+    }
+    "Unknown Storage".into()
+}
 
-    // 5. Google OAuth
-    println!("== Authenticating with Google ==");
-    let token = google_auth::get_token(client_id, client_secret).await?;
+fn detect_gpu() -> String {
+    if let Some(sp) = run("system_profiler", &["SPDisplaysDataType"]) {
+        let mut lines: Vec<String> = Vec::new();
+        for line in sp.lines() {
+            let l = line.trim();
+            if l.starts_with("Chipset Model:") || l.starts_with("Graphics:") {
+                lines.push(l.split(':').nth(1).unwrap_or("").trim().to_string());
+            }
+        }
+        if !lines.is_empty() {
+            return lines.join("; ");
+        }
+    }
+    "Unknown GPU".into()
+}
 
-    // 6. Append to Google Sheets
-    println!("== Uploading row to Google Sheets ==");
-    google_sheets::append_row(sheet_id, &row, &token).await?;
+fn detect_connectivity() -> String {
+    // networksetup -listallhardwareports
+    if let Some(out) = run("networksetup", &["-listallhardwareports"]) {
+        return out;
+    }
+    "Unknown Connectivity".into()
+}
 
-    // 7. Upload CSV to Google Drive
-    println!("== Uploading CSV to Google Drive ==");
-    google_drive::upload_csv(drive_folder_id, csv_path, &token).await?;
+fn detect_audio() -> String {
+    // system_profiler SPAudioDataType
+    if let Some(sp) = run("system_profiler", &["SPAudioDataType"]) {
+        return sp;
+    }
+    "Unknown Audio Devices".into()
+}
 
-    println!("== Pipeline complete ==");
-    Ok(())
+fn detect_display() -> String {
+    if let Some(sp) = run("system_profiler", &["SPDisplaysDataType"]) {
+        return sp;
+    }
+    "Unknown Display".into()
+}
+
+fn detect_battery() -> String {
+    // ioreg -rc AppleSmartBattery
+    if let Some(out) = run("ioreg", &["-rc", "AppleSmartBattery"]) {
+        if out.contains("AppleSmartBattery") {
+            return "Battery Present".into();
+        }
+    }
+    "".into()
+}
+
+fn detect_power() -> String {
+    if let Some(out) = run("pmset", &["-g", "batt"]) {
+        if out.to_lowercase().contains("ac attached") {
+            return "AC Power".into();
+        }
+        return "Battery Power".into();
+    }
+    "".into()
+}
+
+fn detect_cameras() -> String {
+    if let Some(sp) = run("system_profiler", &["SPCameraDataType"]) {
+        return sp;
+    }
+    "".into()
+}
+
+fn detect_biometrics() -> String {
+    // Touch ID presence is tricky; we keep this simple
+    if let Ok(data) = fs::read_to_string("/usr/libexec/PlistBuddy") {
+        let _ = data; // placeholder; realistically we'd parse a plist or use more specific tools
+    }
+    "Touch ID (if present)".into()
+}
+
+fn detect_locale() -> String {
+    std::env::var("LANG").unwrap_or_else(|_| "unknown".into())
+}
+
+fn detect_os_version() -> String {
+    if let Some(out) = run("sw_vers", &[]) {
+        return out;
+    }
+    "".into()
+}
+
+fn detect_form_factor() -> String {
+    // crude heuristic: MacBook vs Desktop
+    if let Some(sp) = run("system_profiler", &["SPHardwareDataType"]) {
+        if sp.contains("MacBook") {
+            return "Laptop".into();
+        }
+    }
+    "Desktop/Unknown".into()
 }
