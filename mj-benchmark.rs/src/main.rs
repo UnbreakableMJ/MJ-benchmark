@@ -14,11 +14,12 @@ mod csv_row;
 mod google_auth;
 mod google_sheets;
 mod google_drive;
+mod tui;
 
 use platform::Platform;
 use model::{DeviceSpecs, BenchResults};
 
-/// MJ-benchmark: Mohamed's Benchmarking Ecosystem orchestrator
+/// MJ-benchmark: Steelbore Benchmarking Orchestrator
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
 struct Cli {
@@ -38,14 +39,22 @@ enum Commands {
     Run {
         #[arg(long)]
         sheet_id: String,
+
         #[arg(long)]
         drive_folder_id: String,
+
         #[arg(long, default_value = "mj_benchmarks.csv")]
         csv_path: String,
+
         #[arg(long)]
         client_id: String,
+
         #[arg(long)]
         client_secret: String,
+
+        /// Mode: tui (default) or cli
+        #[arg(long, default_value = "tui")]
+        mode: String,
     },
 
     /// Only detect OS/distro
@@ -86,22 +95,41 @@ async fn main() -> Result<(), Box<dyn Error>> {
             csv_path,
             client_id,
             client_secret,
+            mode,
         } => {
-            run_full_pipeline(
-                &sheet_id,
-                &drive_folder_id,
-                &csv_path,
-                &client_id,
-                &client_secret,
-            )
-            .await?;
+            match mode.as_str() {
+                "tui" => {
+                    tui::app::run_full_pipeline_with_tui(
+                        &sheet_id,
+                        &drive_folder_id,
+                        &csv_path,
+                        &client_id,
+                        &client_secret,
+                    )
+                    .await?;
+                }
+                "cli" => {
+                    run_full_pipeline_cli(
+                        &sheet_id,
+                        &drive_folder_id,
+                        &csv_path,
+                        &client_id,
+                        &client_secret,
+                    )
+                    .await?;
+                }
+                other => {
+                    eprintln!("Invalid mode: {}. Use --mode tui or --mode cli.", other);
+                    std::process::exit(1);
+                }
+            }
         }
     }
 
     Ok(())
 }
 
-async fn run_full_pipeline(
+async fn run_full_pipeline_cli(
     sheet_id: &str,
     drive_folder_id: &str,
     csv_path: &str,
@@ -111,9 +139,45 @@ async fn run_full_pipeline(
     let platform = platform::detect_platform();
     println!("== Platform: {} ==", platform);
 
-    // 1. Collect device specs
     println!("== Collecting device specs ==");
-    let specs = match platform {
+    let specs = collect_specs(platform);
+    println!("Specs collected.");
+
+    println!("== Running PTS benchmarks ==");
+    pts::ensure_pts_installed()?;
+    pts::ensure_suite_exists()?;
+    let mut bench = pts::run_suite()?;
+    println!("PTS results collected.");
+
+    println!("== Running browser benchmarks ==");
+    let browser = browser_bench::run_browser_benchmarks().await;
+    println!("Browser results: {:?}", browser);
+
+    bench.speedometer_score = browser.speedometer;
+    bench.jetstream_score = browser.jetstream;
+    bench.motionmark_score = browser.motionmark;
+
+    println!("== Building CSV row ==");
+    let row = csv_row::build_csv_row(&specs, &bench);
+
+    println!("== Writing CSV to {} ==", csv_path);
+    csv_row::append_to_csv(csv_path, &row)?;
+
+    println!("== Authenticating with Google ==");
+    let token = google_auth::get_token(client_id, client_secret).await?;
+
+    println!("== Uploading row to Google Sheets ==");
+    google_sheets::append_row(sheet_id, &row, &token).await?;
+
+    println!("== Uploading CSV to Google Drive ==");
+    google_drive::upload_csv(drive_folder_id, csv_path, &token).await?;
+
+    println!("== Pipeline complete ==");
+    Ok(())
+}
+
+fn collect_specs(platform: Platform) -> DeviceSpecs {
+    match platform {
         Platform::DebianLike
         | Platform::FedoraLike
         | Platform::ArchLike
@@ -131,45 +195,5 @@ async fn run_full_pipeline(
             println!("Unknown platform; using dummy specs");
             DeviceSpecs::dummy()
         }
-    };
-    println!("Specs collected.");
-
-    // 2. Run PTS benchmarks
-    println!("== Running PTS benchmarks ==");
-    pts::ensure_pts_installed()?;
-    pts::ensure_suite_exists()?;
-    let mut bench = pts::run_suite()?;
-    println!("PTS results collected.");
-
-    // 3. Browser benchmarks
-    println!("== Running browser benchmarks ==");
-    let browser = browser_bench::run_browser_benchmarks().await;
-    println!("Browser results: {:?}", browser);
-
-    bench.speedometer_score = browser.speedometer;
-    bench.jetstream_score = browser.jetstream;
-    bench.motionmark_score = browser.motionmark;
-
-    // 4. Build CSV row
-    println!("== Building CSV row ==");
-    let row = csv_row::build_csv_row(&specs, &bench);
-
-    // 5. Save CSV
-    println!("== Writing CSV to {} ==", csv_path);
-    csv_row::append_to_csv(csv_path, &row)?;
-
-    // 6. Google OAuth
-    println!("== Authenticating with Google ==");
-    let token = google_auth::get_token(client_id, client_secret).await?;
-
-    // 7. Append to Google Sheets
-    println!("== Uploading row to Google Sheets ==");
-    google_sheets::append_row(sheet_id, &row, &token).await?;
-
-    // 8. Upload CSV to Google Drive
-    println!("== Uploading CSV to Google Drive ==");
-    google_drive::upload_csv(drive_folder_id, csv_path, &token).await?;
-
-    println!("== Pipeline complete ==");
-    Ok(())
+    }
 }
