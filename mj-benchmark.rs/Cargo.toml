@@ -1,0 +1,12 @@
+[package]
+name = "mj-benchmark"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+csv = "1"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+thiserror = "1"
