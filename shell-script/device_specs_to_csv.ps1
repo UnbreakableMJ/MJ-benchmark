@@ -1,4 +1,4 @@
-# Collect system metadata for Mohamed Benchmark Suite
+# Collect system metadata for MJ Benchmark Suite
 
 $Date = Get-Date -Format "yyyy/MM/dd HH:mm"
 $Computer = $env:COMPUTERNAME
