@@ -152,10 +152,36 @@ async fn run_tui_loop<B: ratatui::backend::Backend>(
                     // could animate progress, etc.
                 }
                 TuiEvent::Key(key) => match key {
+                    // Quit
                     KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-                    KeyCode::Up => state.scroll_up(),
-                    KeyCode::Down => state.scroll_down(),
-                    KeyCode::Tab => state.toggle_panel(),
+
+                    // Vim-style :q
+                    KeyCode::Char(':') => {
+                        if let Some(TuiEvent::Key(KeyCode::Char('q'))) =
+                            super::events::poll_event(Duration::from_millis(50))
+                        {
+                            return Ok(());
+                        }
+                    }
+
+                    // Vim-style ZZ
+                    KeyCode::Char('Z') => {
+                        if let Some(TuiEvent::Key(KeyCode::Char('Z'))) =
+                            super::events::poll_event(Duration::from_millis(50))
+                        {
+                            return Ok(());
+                        }
+                    }
+
+                    // Scroll (arrow keys + vim keys)
+                    KeyCode::Up | KeyCode::Char('k') => state.scroll_up(),
+                    KeyCode::Down | KeyCode::Char('j') => state.scroll_down(),
+
+                    // Switch panel (Tab + vim h/l)
+                    KeyCode::Tab | KeyCode::Char('h') | KeyCode::Char('l') => {
+                        state.toggle_panel()
+                    }
+
                     _ => {}
                 },
             }
