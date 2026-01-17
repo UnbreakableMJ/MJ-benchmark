@@ -48,6 +48,11 @@ pub struct TuiState {
     pub success_flash_ticks: u8,
     pub last_completed_step: Option<PipelineStep>,
 
+    // Failure animation
+    pub failed_step: Option<PipelineStep>,
+    pub error_message: Option<String>,
+    pub failure_flash_ticks: u8,
+
     // Search
     pub in_search_mode: bool,
     pub search_query: String,
@@ -87,6 +92,10 @@ impl TuiState {
             success_flash_ticks: 0,
             last_completed_step: None,
 
+            failed_step: None,
+            error_message: None,
+            failure_flash_ticks: 0,
+
             in_search_mode: false,
             search_query: String::new(),
             search_results: Vec::new(),
@@ -102,12 +111,6 @@ impl TuiState {
     pub fn log<S: Into<String>>(&mut self, msg: S) {
         self.logs.push(msg.into());
         self.scroll_to_bottom();
-    }
-
-    /* ───────────── Pipeline ───────────── */
-
-    pub fn set_step(&mut self, step: PipelineStep) {
-        self.current_step = step;
     }
 
     /* ───────────── Spinner & Pulse ───────────── */
@@ -133,6 +136,31 @@ impl TuiState {
             1 | 4 => Style::default().fg(COLOR_SUCCESS).add_modifier(Modifier::DIM),
             2 | 5 => Style::default().fg(COLOR_SUCCESS).add_modifier(Modifier::BOLD),
             _ => Style::default().fg(COLOR_SUCCESS),
+        }
+    }
+
+    /* ───────────── Failure ───────────── */
+
+    pub fn trigger_failure<S: Into<String>>(&mut self, step: PipelineStep, msg: S) {
+        self.failed_step = Some(step);
+        self.error_message = Some(msg.into());
+        self.failure_flash_ticks = 4;
+    }
+
+    pub fn tick_failure_flash(&mut self) {
+        if self.failure_flash_ticks > 0 {
+            self.failure_flash_ticks -= 1;
+        }
+    }
+
+    pub fn failure_style(&self) -> ratatui::style::Style {
+        use ratatui::style::{Modifier, Style};
+        use crate::tui::theme::COLOR_WARNING;
+
+        if self.failure_flash_ticks % 2 == 0 {
+            Style::default().fg(COLOR_WARNING).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(COLOR_WARNING)
         }
     }
 
@@ -192,7 +220,7 @@ impl TuiState {
             .unwrap_or_default()
     }
 
-    /* ───────────── Success Animation ───────────── */
+    /* ───────────── Success ───────────── */
 
     pub fn trigger_success(&mut self, step: PipelineStep) {
         self.last_completed_step = Some(step);
