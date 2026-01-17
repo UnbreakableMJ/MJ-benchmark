@@ -52,7 +52,7 @@ CONNECTIVITY+="; $(get "lsusb | grep -i 'usb' | head -n 1")"
 
 AUDIO_PORTS=$(get "amixer info | grep -i card")
 
-BATTERY=$(get "upower -i /org/freedesktop/UPower/devices/battery_BAT0 | grep -E 'energy-full|capacity' | xargs")
+BATTERY=$(get "upower -i $(upower -e | grep BAT) | grep -E 'energy-full:|energy-full-design:' | xargs")
 POWER_SUPPLY=$(get "cat /sys/class/power_supply/AC/online 2>/dev/null")
 
 DIMENSIONS=$(get "cat /sys/devices/virtual/dmi/id/chassis_type")
@@ -92,4 +92,4 @@ ROW="$BRAND_MODEL,$LAUNCH_DATE,$PRICE,$CPU,$CODENAME,$CPU_SPEED,$X86_LEVEL,$GPU,
 # Write to output file
 echo "$ROW" > "$OUTPUT_FILE"
 
-echo "✅ Device specs row written to $OUTPUT_FILE"
+echo "Device specs row written to $OUTPUT_FILE"
