@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-# MJ Browser Benchmark Suite Logger
-# Runs Speedometer, JetStream, MotionMark in headless Chromium and logs results into CSV
+# MJ Unified Benchmark Pipeline
+# Runs PTS suite + browser benchmarks + metadata logging into CSV
 
-import csv
-import os
+import csv, os, subprocess, json
 from datetime import datetime
 from playwright.sync_api import sync_playwright
 
 CSV_FILE = os.path.expanduser("~/MJ_benchmarks.csv")
+RUN_NAME = "MJ-core"
 
 # Ensure CSV headers exist
 if not os.path.exists(CSV_FILE):
@@ -22,48 +22,74 @@ if not os.path.exists(CSV_FILE):
             "Speedometer 2.1 Score","JetStream 2.2 Score","MotionMark 1.3 Score","Notes"
         ])
 
-def run_benchmark(playwright, url, result_selector, browser="chromium"):
-    browser = getattr(playwright, browser).launch(headless=True)
+# --- Run PTS suite ---
+subprocess.run(["phoronix-test-suite", "benchmark", RUN_NAME])
+
+# Parse PTS JSON results
+result_dir = os.path.expanduser(f"~/.phoronix-test-suite/test-results/{RUN_NAME}")
+result_json = os.path.join(result_dir, "results.json")
+with open(result_json) as f:
+    results = json.load(f)
+
+def get_result(identifier):
+    for r in results["Results"]:
+        if r["Identifier"] == identifier:
+            return r["Result"]
+    return ""
+
+sevenzip = get_result("pts/compress-7zip")
+openssl = get_result("pts/openssl")
+ramspeed = get_result("pts/ramspeed")
+fio = get_result("pts/fio")
+glmark2 = get_result("pts/glmark2")
+kernel_build = get_result("pts/build-linux-kernel")
+
+# --- Run browser benchmarks ---
+def run_browser_bench(playwright, url, selector):
+    browser = playwright.chromium.launch(headless=True)
     page = browser.new_page()
     page.goto(url)
-    # Click "Run" or "Start Test"
     try:
         page.click("#run-button")
     except:
         pass
-    # Wait for result
-    page.wait_for_selector(result_selector, timeout=600000)
-    score = page.query_selector(result_selector).inner_text()
+    page.wait_for_selector(selector, timeout=600000)
+    score = page.query_selector(selector).inner_text()
     browser.close()
     return score
 
 with sync_playwright() as p:
-    speedometer = run_benchmark(p, "https://browserbench.org/Speedometer2.1/", "#result-number")
-    jetstream = run_benchmark(p, "https://browserbench.org/JetStream2.2/", ".benchmark-result")
-    motionmark = run_benchmark(p, "https://browserbench.org/MotionMark1.3/", "#score")
+    speedometer = run_browser_bench(p, "https://browserbench.org/Speedometer2.1/", "#result-number")
+    jetstream = run_browser_bench(p, "https://browserbench.org/JetStream2.2/", ".benchmark-result")
+    motionmark = run_browser_bench(p, "https://browserbench.org/MotionMark1.3/", "#score")
 
-# Metadata placeholders (replace with your logger integration)
+# --- Metadata ---
 date = datetime.now().strftime("%Y/%m/%d %H:%M")
 computer = os.uname().nodename
-cpu = "(fill from lscpu)"
-gpu = "(fill from lspci)"
-npu = "None"
-ram = "(fill from free -h)"
-storage = "(fill from lsblk)"
-comp_flags = "(fill manually)"
-distro = "(fill from /etc/os-release)"
+cpu = subprocess.getoutput("lscpu | grep 'Model name' | sed 's/Model name:\\s*//'")
+gpu = subprocess.getoutput("lspci | grep -i 'vga' | sed 's/.*controller: //'")
+ram = subprocess.getoutput("free -h | awk '/Mem:/ {print $2}'")
+storage = subprocess.getoutput("lsblk -d -o NAME,SIZE,TYPE | grep disk | awk '{print $1 \" \" $2}'")
+distro = subprocess.getoutput("lsb_release -d 2>/dev/null | cut -f2 || grep PRETTY_NAME /etc/os-release | cut -d= -f2 | tr -d '\"'")
 shell = os.environ.get("SHELL","bash")
 de = os.environ.get("XDG_CURRENT_DESKTOP","Unknown")
-repo_level = "(fill manually)"
 
-# Append row with browser scores only (other fields left blank for now)
+# Manual fields
+npu = "None"
+comp_flags = "(fill manually)"
+repo_level = "(fill manually)"
+notes = "(fill)"
+
+# --- Append row ---
 with open(CSV_FILE, "a", newline="") as f:
     writer = csv.writer(f)
     writer.writerow([
         date,computer,cpu,gpu,npu,ram,storage,comp_flags,
         distro,shell,de,repo_level,
-        "","","","","","","","",
-        "",speedometer,jetstream,motionmark,"Browser run"
+        sevenzip,openssl,ramspeed,
+        fio,"","","",
+        glmark2,kernel_build,
+        speedometer,jetstream,motionmark,notes
     ])
 
-print("✅ Browser benchmark scores appended to", CSV_FILE)
+print("✅ Full benchmark suite + browser scores + metadata appended to", CSV_FILE)
