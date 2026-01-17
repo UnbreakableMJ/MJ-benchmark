@@ -1,5 +1,41 @@
-                    GNU GENERAL PUBLIC LICENSE
-                       Version 3, 29 June 2007
+MJ Benchmark
+Copyright (c) 2024‑2026
+Mohamed Hammad
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+----------------------------------------------------------------------
+Trademark Notice
+----------------------------------------------------------------------
+
+The following names are trademarks of Mohamed Hammad:
+
+  • Steelbore
+  • S3cure
+  • S3cure me
+  • S3cure us
+  • MJ Benchmark
+
+These names may not be used to endorse or promote products derived
+from this software, nor used in any way that suggests affiliation,
+sponsorship, or approval by Mohamed Hammad, without prior written
+permission.
+
+----------------------------------------------------------------------
+GNU GENERAL PUBLIC LICENSE
+Version 3, 29 June 2007
+----------------------------------------------------------------------
 
  Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
  Everyone is permitted to copy and distribute verbatim copies
