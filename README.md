@@ -2,27 +2,25 @@
 Performance system monitoring and benchmarking app
 
 # MJ Benchmarking Ecosystem  
-A unified, cross‑platform benchmarking pipeline for Linux, BSD, macOS, and Windows.
+A unified, cross‑platform benchmarking and device‑spec collection system with automatic cloud sync to Google Drive and Google Sheets.
 
 This project provides:
 
-- A universal installer for all required tools  
-- A device‑spec collector (hardware + software metadata)  
+- A universal installer for Linux, BSD, macOS, and Windows  
+- A device‑spec collector (Bash + PowerShell)  
 - A benchmark pipeline (PTS + browser + battery health)  
-- A unified CSV output compatible with Google Sheets  
-- A Google Sheets template with filters, dropdowns, and conditional formatting  
-- A single command (`run_bench.sh`) that runs everything  
+- A unified CSV schema  
+- A Google Sheets–optimized template  
+- Automatic sync to Google Drive + Google Sheets  
+- A single command (`run_bench`) that runs everything end‑to‑end  
 
 ---
 
-## 📦 Features
+## 🚀 Features
 
 ### ✔ Cross‑platform support  
-- Debian/Ubuntu  
-- Fedora/RHEL  
-- Arch/Manjaro  
-- NixOS / nix-env  
-- FreeBSD / NetBSD / OpenBSD  
+- Linux (Debian/Ubuntu, Fedora/RHEL, Arch, NixOS)  
+- BSD (FreeBSD, NetBSD, OpenBSD)  
 - macOS  
 - Windows (PowerShell)
 
@@ -40,20 +38,26 @@ This project provides:
 ### ✔ Device metadata  
 - CPU, GPU, RAM, storage  
 - Connectivity, display, build  
-- Battery health (full, design, %, cycles)  
-- BIOS key  
+- Battery health (Linux)  
+- Cameras, biometrics  
 - OS + kernel  
 - Upgrade options  
+- BIOS key  
 
 ### ✔ Output  
 One CSV row per run, matching the Google Sheets master matrix.
 
+### ✔ Cloud sync  
+- Uploads CSV to Google Drive  
+- Appends latest row to Google Sheets  
+
 ---
 
-## 🚀 Installation
+## 📦 Installation
 
-### Universal installer (Linux / BSD / macOS)
+### Linux / BSD / macOS  
+Use the universal installer:
 
 ```bash
-chmod +x install_mj_bench_stack.sh
-./install_mj_bench_stack.sh
+chmod +x install_MJ_bench_stack.sh
+./install_MJ_bench_stack.sh
