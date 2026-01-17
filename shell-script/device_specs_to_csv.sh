@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 
-# MJ Benchmark Suite Logger
-# Collect metadata + append benchmark results into CSV
+# MJ Benchmark Suite Auto-Logger
+# Collect metadata + parse PTS results + append into CSV
 
 CSV_FILE="$HOME/MJ_benchmarks.csv"
+RUN_NAME=$1   # pass the PTS run name as argument
 
 # Ensure CSV has headers if new
 if [ ! -f "$CSV_FILE" ]; then
@@ -26,22 +27,24 @@ NPU="None"
 COMP_FLAGS="(fill manually)"
 REPO_LEVEL="(fill manually)"
 
-# Benchmark results (fill manually or parse from PTS CSV export)
-SEVENZIP="(fill)"
-OPENSSL="(fill)"
-RAMSPEED="(fill)"
-FIO_SEQ_READ="(fill)"
-FIO_SEQ_WRITE="(fill)"
-FIO_RAND_READ="(fill)"
-FIO_RAND_WRITE="(fill)"
-GLMARK2="(fill)"
-KERNEL_BUILD="(fill)"
+# Parse PTS JSON results
+RESULT_DIR="$HOME/.phoronix-test-suite/test-results/$RUN_NAME"
+RESULT_JSON="$RESULT_DIR/results.json"
+
+SEVENZIP=$(jq -r '.Results[] | select(.Identifier=="pts/compress-7zip") | .Result' $RESULT_JSON)
+OPENSSL=$(jq -r '.Results[] | select(.Identifier=="pts/openssl") | .Result' $RESULT_JSON)
+RAMSPEED=$(jq -r '.Results[] | select(.Identifier=="pts/ramspeed") | .Result' $RESULT_JSON)
+FIO_SEQ_READ=$(jq -r '.Results[] | select(.Identifier=="pts/fio") | .Result' $RESULT_JSON)
+GLMARK2=$(jq -r '.Results[] | select(.Identifier=="pts/glmark2") | .Result' $RESULT_JSON)
+KERNEL_BUILD=$(jq -r '.Results[] | select(.Identifier=="pts/build-linux-kernel") | .Result' $RESULT_JSON)
+
+# Browser tests (manual entry for now)
 SPEEDOMETER="(fill)"
 JETSTREAM="(fill)"
 MOTIONMARK="(fill)"
 NOTES="(fill)"
 
 # Append row
-echo "$DATE,$COMPUTER,$CPU,$GPU,$NPU,$RAM,$STORAGE,$COMP_FLAGS,$DISTRO,$SHELL,$DE,$REPO_LEVEL,$SEVENZIP,$OPENSSL,$RAMSPEED,$FIO_SEQ_READ,$FIO_SEQ_WRITE,$FIO_RAND_READ,$FIO_RAND_WRITE,$GLMARK2,$KERNEL_BUILD,$SPEEDOMETER,$JETSTREAM,$MOTIONMARK,$NOTES" >> "$CSV_FILE"
+echo "$DATE,$COMPUTER,$CPU,$GPU,$NPU,$RAM,$STORAGE,$COMP_FLAGS,$DISTRO,$SHELL,$DE,$REPO_LEVEL,$SEVENZIP,$OPENSSL,$RAMSPEED,$FIO_SEQ_READ,,,$GLMARK2,$KERNEL_BUILD,$SPEEDOMETER,$JETSTREAM,$MOTIONMARK,$NOTES" >> "$CSV_FILE"
 
-echo "✅ Benchmark metadata appended to $CSV_FILE"
+echo "✅ Benchmark metadata + PTS results appended to $CSV_FILE"
