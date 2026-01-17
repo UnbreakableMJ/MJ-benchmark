@@ -13,7 +13,6 @@ use crate::tui::theme::*;
 pub fn draw<B: Backend>(f: &mut Frame<B>, state: &TuiState) {
     let size = f.size();
 
-    // Sidebar-left layout
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
@@ -62,33 +61,6 @@ fn draw_sidebar<B: Backend>(f: &mut Frame<B>, state: &TuiState, area: Rect) {
         lines.push(Spans::from(Span::styled("Specs: collecting…", text_style())));
     }
 
-    if let Some(bench) = &state.bench {
-        lines.push(Spans::from(Span::raw("")));
-        lines.push(Spans::from(Span::styled(
-            "Browser:",
-            text_style().add_modifier(Modifier::BOLD),
-        )));
-
-        if let Some(s) = bench.speedometer_score {
-            lines.push(Spans::from(Span::styled(
-                format!("Speedometer: {:.1}", s),
-                text_style(),
-            )));
-        }
-        if let Some(j) = bench.jetstream_score {
-            lines.push(Spans::from(Span::styled(
-                format!("JetStream: {:.1}", j),
-                text_style(),
-            )));
-        }
-        if let Some(m) = bench.motionmark_score {
-            lines.push(Spans::from(Span::styled(
-                format!("MotionMark: {:.1}", m),
-                text_style(),
-            )));
-        }
-    }
-
     let para = Paragraph::new(lines)
         .wrap(Wrap { trim: true })
         .style(text_style());
@@ -97,7 +69,6 @@ fn draw_sidebar<B: Backend>(f: &mut Frame<B>, state: &TuiState, area: Rect) {
 }
 
 fn draw_main<B: Backend>(f: &mut Frame<B>, state: &TuiState, area: Rect) {
-    // Main area: progress, logs, and optional bottom search bar
     let constraints = if state.in_search_mode {
         vec![Constraint::Length(8), Constraint::Min(5), Constraint::Length(3)]
     } else {
@@ -136,7 +107,9 @@ fn draw_progress<B: Backend>(f: &mut Frame<B>, state: &TuiState, area: Rect) {
         let is_active = step == state.current_step;
         let is_done = step_completed(step, state.current_step);
 
-        let (marker, marker_style) = if is_active {
+        let (marker, style) = if state.failed_step == Some(step) {
+            ("✖", state.failure_style())
+        } else if is_active {
             (state.spinner(), state.pulse_style())
         } else if state.is_flashing_success(step) {
             ("✔", state.pulse_style())
@@ -146,8 +119,7 @@ fn draw_progress<B: Backend>(f: &mut Frame<B>, state: &TuiState, area: Rect) {
             (" ", text_style())
         };
 
-        // Time: show current step’s live timer; completed steps show their locked time if available
-        let time_str = if is_active {
+        let time = if is_active {
             state.formatted_elapsed_for_current()
         } else if is_done {
             state.formatted_elapsed_for_step(step)
@@ -155,21 +127,12 @@ fn draw_progress<B: Backend>(f: &mut Frame<B>, state: &TuiState, area: Rect) {
             String::new()
         };
 
-        let label_style = if is_active {
-            state.pulse_style()
-        } else if state.is_flashing_success(step) {
-            state.pulse_style()
-        } else {
-            text_style()
-        };
-
         items.push(ListItem::new(Spans::from(vec![
-            Span::styled(format!("[{}] ", marker), marker_style),
-            Span::styled(format!("{:<22}", label), label_style),
-            Span::styled(time_str, label_style),
+            Span::styled(format!("[{}] ", marker), style),
+            Span::styled(format!("{:<22}", label), style),
+            Span::styled(time, style),
         ])));
 
-        // Animated progress bar under active step
         if is_active {
             let bar = render_progress_bar(state, 20);
             items.push(ListItem::new(Spans::from(vec![
@@ -179,33 +142,7 @@ fn draw_progress<B: Backend>(f: &mut Frame<B>, state: &TuiState, area: Rect) {
         }
     }
 
-    let list = List::new(items).block(block);
-    f.render_widget(list, area);
-}
-
-fn render_progress_bar(state: &TuiState, width: u16) -> String {
-    let mut s = String::with_capacity(width as usize);
-    for i in 0..width {
-        if i == state.progress_pos {
-            s.push('█');
-        } else {
-            s.push('░');
-        }
-    }
-    s
-}
-
-fn step_completed(step: PipelineStep, current: PipelineStep) -> bool {
-    use PipelineStep::*;
-    match (step, current) {
-        (Specs, Pts | Browser | Csv | Sheets | Drive | Done) => true,
-        (Pts, Browser | Csv | Sheets | Drive | Done) => true,
-        (Browser, Csv | Sheets | Drive | Done) => true,
-        (Csv, Sheets | Drive | Done) => true,
-        (Sheets, Drive | Done) => true,
-        (Drive, Done) => true,
-        _ => false,
-    }
+    f.render_widget(List::new(items).block(block), area);
 }
 
 fn draw_logs<B: Backend>(f: &mut Frame<B>, state: &TuiState, area: Rect) {
@@ -217,27 +154,30 @@ fn draw_logs<B: Backend>(f: &mut Frame<B>, state: &TuiState, area: Rect) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(Span::styled(
-            "Logs (↑↓/jk scroll, Tab/hl switch, / search, n/N next/prev, q quit)",
-            border,
-        ))
+        .title(Span::styled("Logs", border))
         .border_style(border);
 
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // We keep rendering newest first (reverse), matching your previous UI.
-    // Scroll is treated as a simple offset; this is intentionally lightweight.
-    let start = state.log_scroll.min(state.logs.len());
-    let visible_iter = state.logs.iter().rev().skip(start);
+    let mut y = inner.y;
 
-    let items: Vec<ListItem> = visible_iter
-        .take(inner.height as usize)
+    if let Some(err) = &state.error_message {
+        let err_para = Paragraph::new(Spans::from(Span::styled(
+            format!("ERROR: {}", err),
+            warning_style().add_modifier(Modifier::BOLD),
+        )));
+        f.render_widget(err_para, Rect { y, height: 1, ..inner });
+        y += 1;
+    }
+
+    let visible = state.logs.iter().rev().skip(state.log_scroll);
+    let items: Vec<ListItem> = visible
+        .take((inner.height - (y - inner.y)) as usize)
         .map(|l| ListItem::new(Spans::from(Span::styled(l.clone(), text_style()))))
         .collect();
 
-    let list = List::new(items);
-    f.render_widget(list, inner);
+    f.render_widget(List::new(items), Rect { y, ..inner });
 }
 
 fn draw_search_bar<B: Backend>(f: &mut Frame<B>, state: &TuiState, area: Rect) {
@@ -249,28 +189,36 @@ fn draw_search_bar<B: Backend>(f: &mut Frame<B>, state: &TuiState, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let matches = state.search_results.len();
-    let hint = if matches == 0 {
-        " (no matches)"
-    } else {
-        ""
-    };
-
-    let text = vec![
+    let para = Paragraph::new(vec![
         Spans::from(vec![
             Span::styled("/", state.pulse_style()),
             Span::styled(state.search_query.clone(), text_style()),
-            Span::styled("▏", state.pulse_style()), // cursor-ish
+            Span::styled("▏", state.pulse_style()),
         ]),
         Spans::from(Span::styled(
-            format!("Enter: select | Esc: cancel | matches: {}{}", matches, hint),
+            format!("matches: {}", state.search_results.len()),
             text_style().add_modifier(Modifier::DIM),
         )),
-    ];
-
-    let para = Paragraph::new(text)
-        .wrap(Wrap { trim: true })
-        .style(text_style());
+    ]);
 
     f.render_widget(para, inner);
+}
+
+fn render_progress_bar(state: &TuiState, width: u16) -> String {
+    (0..width)
+        .map(|i| if i == state.progress_pos { '█' } else { '░' })
+        .collect()
+}
+
+fn step_completed(step: PipelineStep, current: PipelineStep) -> bool {
+    use PipelineStep::*;
+    matches!(
+        (step, current),
+        (Specs, Pts | Browser | Csv | Sheets | Drive | Done)
+            | (Pts, Browser | Csv | Sheets | Drive | Done)
+            | (Browser, Csv | Sheets | Drive | Done)
+            | (Csv, Sheets | Drive | Done)
+            | (Sheets, Drive | Done)
+            | (Drive, Done)
+    )
 }
