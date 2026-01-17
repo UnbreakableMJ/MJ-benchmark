@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Wrapper for MJ Unified Benchmark Pipeline
+
+# Ensure Python pipeline exists
+PIPELINE="$HOME/MJ_pipeline.py"
+
+if [ ! -f "$PIPELINE" ]; then
+  echo "❌ Pipeline script not found at $PIPELINE"
+  exit 1
+fi
+
+# Run pipeline
+python3 "$PIPELINE"
