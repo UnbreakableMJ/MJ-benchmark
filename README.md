@@ -38,7 +38,7 @@ Install via Cargo:
 cargo install mj-benchmark
 
 Or build from source:
-git clone https://github.com/yourname/mj-benchmark
+git clone https://github.com/UnbreakableMJ/mj-benchmark
 cd mj-benchmark
 cargo build --release
 
