@@ -52,7 +52,7 @@ enum Commands {
         #[arg(long)]
         client_secret: String,
 
-        /// Mode: tui (default) or cli
+        /// Mode: tui (default) or cli. TUI auto-falls back to CLI when headless/CI/no TTY.
         #[arg(long, default_value = "tui")]
         mode: String,
     },
@@ -97,8 +97,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             client_secret,
             mode,
         } => {
-            match mode.as_str() {
-                "tui" => {
+            let want_tui = mode == "tui";
+            let use_tui = want_tui && is_tty_stdout() && !is_ci_env();
+
+            match (want_tui, use_tui) {
+                (true, true) => {
                     tui::app::run_full_pipeline_with_tui(
                         &sheet_id,
                         &drive_folder_id,
@@ -108,7 +111,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     )
                     .await?;
                 }
-                "cli" => {
+                (true, false) => {
+                    eprintln!("TUI requested but no usable TTY detected — falling back to CLI mode.");
                     run_full_pipeline_cli(
                         &sheet_id,
                         &drive_folder_id,
@@ -118,15 +122,34 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     )
                     .await?;
                 }
-                other => {
-                    eprintln!("Invalid mode: {}. Use --mode tui or --mode cli.", other);
-                    std::process::exit(1);
+                (false, _) => {
+                    // Explicit CLI mode
+                    run_full_pipeline_cli(
+                        &sheet_id,
+                        &drive_folder_id,
+                        &csv_path,
+                        &client_id,
+                        &client_secret,
+                    )
+                    .await?;
                 }
             }
         }
     }
 
     Ok(())
+}
+
+fn is_tty_stdout() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdout().is_terminal()
+}
+
+fn is_ci_env() -> bool {
+    std::env::var("CI").is_ok()
+        || std::env::var("GITHUB_ACTIONS").is_ok()
+        || std::env::var("GITLAB_CI").is_ok()
+        || std::env::var("BUILD_BUILDID").is_ok() // Azure DevOps
 }
 
 async fn run_full_pipeline_cli(
