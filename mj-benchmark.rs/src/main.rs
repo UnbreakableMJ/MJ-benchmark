@@ -19,7 +19,6 @@ mod tui;
 use platform::Platform;
 use model::{DeviceSpecs, BenchResults};
 
-/// MJ-benchmark: Steelbore Benchmarking Orchestrator
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
 struct Cli {
@@ -29,13 +28,11 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Detect OS/distro and install dependencies
     Install {
         #[arg(long)]
         execute: bool,
     },
 
-    /// Run full pipeline: specs + benchmarks + CSV + sync
     Run {
         #[arg(long)]
         sheet_id: String,
@@ -52,15 +49,12 @@ enum Commands {
         #[arg(long)]
         client_secret: String,
 
-        /// Mode: tui (default) or cli. TUI auto-falls back to CLI when headless/CI/no TTY.
+        /// tui (default) or cli
         #[arg(long, default_value = "tui")]
         mode: String,
     },
 
-    /// Only detect OS/distro
     Detect,
-
-    /// Show planned install commands
     PlanInstall,
 }
 
@@ -100,39 +94,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let want_tui = mode == "tui";
             let use_tui = want_tui && is_tty_stdout() && !is_ci_env();
 
-            match (want_tui, use_tui) {
-                (true, true) => {
-                    tui::app::run_full_pipeline_with_tui(
-                        &sheet_id,
-                        &drive_folder_id,
-                        &csv_path,
-                        &client_id,
-                        &client_secret,
-                    )
-                    .await?;
-                }
-                (true, false) => {
-                    eprintln!("TUI requested but no usable TTY detected — falling back to CLI mode.");
-                    run_full_pipeline_cli(
-                        &sheet_id,
-                        &drive_folder_id,
-                        &csv_path,
-                        &client_id,
-                        &client_secret,
-                    )
-                    .await?;
-                }
-                (false, _) => {
-                    // Explicit CLI mode
-                    run_full_pipeline_cli(
-                        &sheet_id,
-                        &drive_folder_id,
-                        &csv_path,
-                        &client_id,
-                        &client_secret,
-                    )
-                    .await?;
-                }
+            if want_tui && !use_tui {
+                eprintln!("No usable TTY detected — falling back to CLI mode.");
+            }
+
+            if use_tui {
+                tui::app::run_full_pipeline_with_tui(
+                    &sheet_id,
+                    &drive_folder_id,
+                    &csv_path,
+                    &client_id,
+                    &client_secret,
+                )
+                .await?;
+            } else {
+                run_full_pipeline_cli(
+                    &sheet_id,
+                    &drive_folder_id,
+                    &csv_path,
+                    &client_id,
+                    &client_secret,
+                )
+                .await?;
             }
         }
     }
@@ -149,7 +132,7 @@ fn is_ci_env() -> bool {
     std::env::var("CI").is_ok()
         || std::env::var("GITHUB_ACTIONS").is_ok()
         || std::env::var("GITLAB_CI").is_ok()
-        || std::env::var("BUILD_BUILDID").is_ok() // Azure DevOps
+        || std::env::var("BUILD_BUILDID").is_ok()
 }
 
 async fn run_full_pipeline_cli(
@@ -160,42 +143,30 @@ async fn run_full_pipeline_cli(
     client_secret: &str,
 ) -> Result<(), Box<dyn Error>> {
     let platform = platform::detect_platform();
-    println!("== Platform: {} ==", platform);
+    println!("Platform: {}", platform);
 
-    println!("== Collecting device specs ==");
+    println!("Collecting specs…");
     let specs = collect_specs(platform);
-    println!("Specs collected.");
 
-    println!("== Running PTS benchmarks ==");
+    println!("Running PTS benchmarks…");
     pts::ensure_pts_installed()?;
     pts::ensure_suite_exists()?;
     let mut bench = pts::run_suite()?;
-    println!("PTS results collected.");
 
-    println!("== Running browser benchmarks ==");
+    println!("Running browser benchmarks…");
     let browser = browser_bench::run_browser_benchmarks().await;
-    println!("Browser results: {:?}", browser);
-
     bench.speedometer_score = browser.speedometer;
     bench.jetstream_score = browser.jetstream;
     bench.motionmark_score = browser.motionmark;
 
-    println!("== Building CSV row ==");
     let row = csv_row::build_csv_row(&specs, &bench);
-
-    println!("== Writing CSV to {} ==", csv_path);
     csv_row::append_to_csv(csv_path, &row)?;
 
-    println!("== Authenticating with Google ==");
     let token = google_auth::get_token(client_id, client_secret).await?;
-
-    println!("== Uploading row to Google Sheets ==");
     google_sheets::append_row(sheet_id, &row, &token).await?;
-
-    println!("== Uploading CSV to Google Drive ==");
     google_drive::upload_csv(drive_folder_id, csv_path, &token).await?;
 
-    println!("== Pipeline complete ==");
+    println!("Pipeline complete.");
     Ok(())
 }
 
@@ -214,9 +185,6 @@ fn collect_specs(platform: Platform) -> DeviceSpecs {
 
         Platform::Windows => specs_windows::collect_windows_specs(),
 
-        Platform::Unknown => {
-            println!("Unknown platform; using dummy specs");
-            DeviceSpecs::dummy()
-        }
+        Platform::Unknown => DeviceSpecs::dummy(),
     }
 }
