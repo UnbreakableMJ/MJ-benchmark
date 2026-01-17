@@ -1,22 +1,22 @@
 use clap::{Parser, Subcommand};
-use std::fmt;
-use std::process::Command;
+use std::error::Error;
 
 mod platform;
-mod model;
 mod install;
+mod specs_linux;
+mod pts;
+mod model;
 mod csv_row;
-mod sync;
+mod google_auth;
+mod google_sheets;
+mod google_drive;
 
 use platform::Platform;
 use model::{DeviceSpecs, BenchResults};
-use csv_row::build_csv_row;
 
-/// MJ-benchmark: Mohamed's Benchmarking Ecosystem orchestrator
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
+#[command(author, version, about)]
 struct Cli {
-    /// Subcommand to run
     #[command(subcommand)]
     command: Commands,
 }
@@ -25,55 +25,50 @@ struct Cli {
 enum Commands {
     /// Detect OS/distro and install dependencies
     Install {
-        /// Actually run commands (otherwise just print them)
         #[arg(long)]
         execute: bool,
     },
 
     /// Run full pipeline: specs + benchmarks + CSV + sync
     Run {
-        /// Google Sheets ID
         #[arg(long)]
-        sheet_id: Option<String>,
-        /// Google Drive folder ID
+        sheet_id: String,
         #[arg(long)]
-        drive_folder_id: Option<String>,
-        /// Path to output CSV file
+        drive_folder_id: String,
         #[arg(long, default_value = "mj_benchmarks.csv")]
         csv_path: String,
+        #[arg(long)]
+        client_id: String,
+        #[arg(long)]
+        client_secret: String,
     },
 
-    /// Only detect OS/distro and print it
     Detect,
-
-    /// Only show what would be installed
     PlanInstall,
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
 
-    match &cli.command {
+    match cli.command {
         Commands::Detect => {
-            let platform = platform::detect_platform();
-            println!("Detected platform: {}", platform);
+            println!("Detected platform: {}", platform::detect_platform());
         }
 
         Commands::PlanInstall => {
-            let platform = platform::detect_platform();
-            println!("Detected platform: {}", platform);
-            println!("Planned install commands:");
-            install::print_install_plan(platform);
+            let p = platform::detect_platform();
+            println!("Detected platform: {}", p);
+            install::print_install_plan(p);
         }
 
         Commands::Install { execute } => {
-            let platform = platform::detect_platform();
-            println!("Detected platform: {}", platform);
-            if *execute {
-                install::run_install(platform)?;
+            let p = platform::detect_platform();
+            println!("Detected platform: {}", p);
+            if execute {
+                install::run_install(p)?;
             } else {
-                println!("(dry run) Planned install commands:");
-                install::print_install_plan(platform);
+                install::print_install_plan(p);
             }
         }
 
@@ -81,49 +76,82 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             sheet_id,
             drive_folder_id,
             csv_path,
+            client_id,
+            client_secret,
         } => {
-            let platform = platform::detect_platform();
-            println!("Detected platform: {}", platform);
-
-            // 1) Ensure dependencies (for now, just print plan)
-            println!("== Install phase (dry-run) ==");
-            install::print_install_plan(platform);
-
-            // 2) Collect device specs (dummy for now)
-            println!("== Collecting device specs ==");
-            let specs = DeviceSpecs::dummy();
-            println!("Specs: {:?}", specs);
-
-            // 3) Run benchmarks (dummy for now)
-            println!("== Running benchmarks (stub) ==");
-            let bench = BenchResults::dummy();
-            println!("Bench results: {:?}", bench);
-
-            // 4) Build CSV row
-            println!("== Building CSV row ==");
-            let row = build_csv_row(&specs, &bench);
-            println!("CSV row:\n{}", row);
-
-            // 5) Save to CSV file (append, create header if missing)
-            println!("== Writing to CSV file: {} ==", csv_path);
-            csv_row::append_to_csv(csv_path, &row)?;
-
-            // 6) Sync to Google (stub)
-            if let Some(sheet) = sheet_id {
-                println!("== [STUB] Would append row to Google Sheet: {} ==", sheet);
-                sync::append_row_to_sheet_stub(sheet, &row)?;
-            } else {
-                println!("No --sheet-id provided; skipping Sheets sync.");
-            }
-
-            if let Some(folder) = drive_folder_id {
-                println!("== [STUB] Would upload CSV to Google Drive folder: {} ==", folder);
-                sync::upload_csv_to_drive_stub(folder, csv_path)?;
-            } else {
-                println!("No --drive-folder-id provided; skipping Drive upload.");
-            }
+            run_full_pipeline(
+                &sheet_id,
+                &drive_folder_id,
+                &csv_path,
+                &client_id,
+                &client_secret,
+            )
+            .await?;
         }
     }
 
+    Ok(())
+}
+
+async fn run_full_pipeline(
+    sheet_id: &str,
+    drive_folder_id: &str,
+    csv_path: &str,
+    client_id: &str,
+    client_secret: &str,
+) -> Result<(), Box<dyn Error>> {
+    let platform = platform::detect_platform();
+    println!("== Platform: {} ==", platform);
+
+    // 1. Collect specs
+    println!("== Collecting device specs ==");
+    let specs = match platform {
+        Platform::DebianLike
+        | Platform::FedoraLike
+        | Platform::ArchLike
+        | Platform::Nix
+        | Platform::FreeBsd
+        | Platform::NetBsd
+        | Platform::OpenBsd
+        | Platform::MacOs => specs_linux::collect_linux_specs(),
+
+        Platform::Windows => {
+            println!("Windows specs not implemented yet.");
+            DeviceSpecs::dummy()
+        }
+
+        Platform::Unknown => {
+            println!("Unknown platform; using dummy specs.");
+            DeviceSpecs::dummy()
+        }
+    };
+
+    // 2. Run PTS
+    println!("== Running PTS benchmarks ==");
+    pts::ensure_pts_installed()?;
+    pts::ensure_suite_exists()?;
+    let bench = pts::run_suite()?;
+
+    // 3. Build CSV row
+    println!("== Building CSV row ==");
+    let row = csv_row::build_csv_row(&specs, &bench);
+
+    // 4. Save CSV
+    println!("== Writing CSV to {} ==", csv_path);
+    csv_row::append_to_csv(csv_path, &row)?;
+
+    // 5. Google OAuth
+    println!("== Authenticating with Google ==");
+    let token = google_auth::get_token(client_id, client_secret).await?;
+
+    // 6. Append to Google Sheets
+    println!("== Uploading row to Google Sheets ==");
+    google_sheets::append_row(sheet_id, &row, &token).await?;
+
+    // 7. Upload CSV to Google Drive
+    println!("== Uploading CSV to Google Drive ==");
+    google_drive::upload_csv(drive_folder_id, csv_path, &token).await?;
+
+    println!("== Pipeline complete ==");
     Ok(())
 }
