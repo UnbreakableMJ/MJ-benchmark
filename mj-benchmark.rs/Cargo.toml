@@ -10,5 +10,6 @@ csv = "1"
 fantoccini = "0.19"
 thiserror = "1"
 
+# TUI
 ratatui = "0.26"
 crossterm = "0.27"
