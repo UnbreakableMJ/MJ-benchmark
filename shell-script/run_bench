@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # MJ Unified Benchmark Runner + Google Sync
+# Includes automatic installation of Google API Python libraries
 
 set -euo pipefail
 
@@ -10,23 +11,70 @@ BENCH_TMP="$HOME/.bench_results_tmp.csv"
 GOOGLE_SHEET_ID="PUT_YOUR_SHEET_ID_HERE"
 GOOGLE_DRIVE_FOLDER_ID="PUT_YOUR_DRIVE_FOLDER_ID_HERE"
 
+# --- 0. Ensure Python exists ---
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "❌ python3 not found. Install Python first."
+    exit 1
+fi
+
+# --- 1. Auto-install Google API libraries if missing ---
+echo "Checking Google API Python libraries..."
+
+python3 - << 'EOF'
+import pkgutil, subprocess, sys
+
+required = [
+    "googleapiclient",
+    "google_auth_oauthlib",
+    "google_auth_httplib2"
+]
+
+missing = [p for p in required if pkgutil.find_loader(p) is None]
+
+if missing:
+    print("Installing missing Google API libraries:", missing)
+    subprocess.check_call([sys.executable, "-m", "pip", "install"] + missing)
+else:
+    print("All Google API libraries already installed.")
+EOF
+
+# --- 2. Ensure Playwright is installed ---
+echo "Checking Playwright installation..."
+
+python3 - << 'EOF'
+import pkgutil, subprocess, sys
+
+if pkgutil.find_loader("playwright") is None:
+    print("Installing Playwright...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "playwright"])
+    subprocess.check_call([sys.executable, "-m", "playwright", "install"])
+else:
+    print("Playwright already installed.")
+EOF
+
+# --- 3. Collect device specs ---
 echo "Collecting device specs..."
 bash "$HOME/device_specs_to_csv.sh" --output "$SPECS_TMP"
 
+# --- 4. Run benchmark pipeline ---
 echo "Running benchmark suite..."
 python3 "$HOME/MJ_pipeline.py" --output "$BENCH_TMP"
 
+# --- 5. Ensure master CSV exists ---
 if [ ! -f "$CSV_FILE" ]; then
     echo "Creating master CSV..."
     echo "Brand & Model,Launch Date,Price,CPU & Performance,Codename,CPU Speed,x86-64 Level,GPU,AI & NPU,RAM & Storage,Connectivity,Audio Ports,NFC & Wallet,Battery,Power & Charging,Qi Wireless Charging,Form Factor,Dimensions & Weight,Display,Build & Durability,Cameras,Biometrics & Health,Regional,Software & Updates,Color,Upgrade Options,Ecosystem Lock-in,Wear Detection,Touch Control,Storage Case,Special Features,Official Site,Info Links,BIOS/Boot Key,7-Zip MIPS,OpenSSL MB/s,RAMspeed MB/s,fio Seq Read MB/s,fio Seq Write MB/s,fio Rand Read IOPS,fio Rand Write IOPS,glmark2 Score,Kernel Build Time (s),Speedometer 2.1 Score,JetStream 2.2 Score,MotionMark 1.3 Score,Battery Full Capacity (Wh),Battery Design Capacity (Wh),Battery Health (%),Battery Cycle Count,Notes" > "$CSV_FILE"
 fi
 
+# --- 6. Merge both rows ---
 echo "Merging results..."
 ROW="$(cat "$SPECS_TMP"),$(cat "$BENCH_TMP")"
 echo "$ROW" >> "$CSV_FILE"
 
+# --- 7. Cleanup ---
 rm -f "$SPECS_TMP" "$BENCH_TMP"
 
+# --- 8. Sync to Google Drive + Google Sheets ---
 echo "Syncing to Google Drive + Google Sheets..."
 python3 "$HOME/sync_to_google.py" \
     --csv "$CSV_FILE" \
@@ -34,3 +82,4 @@ python3 "$HOME/sync_to_google.py" \
     --drive-folder "$GOOGLE_DRIVE_FOLDER_ID"
 
 echo "✅ Benchmark synced to cloud."
+echo "Done."
