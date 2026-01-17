@@ -8,6 +8,7 @@ mod specs_macos;
 mod specs_bsd;
 mod specs_windows;
 mod pts;
+mod browser_bench;
 mod model;
 mod csv_row;
 mod google_auth;
@@ -19,7 +20,7 @@ use model::{DeviceSpecs, BenchResults};
 
 /// MJ-benchmark: Mohamed's Benchmarking Ecosystem orchestrator
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
+#[command(author, version, about)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -29,34 +30,28 @@ struct Cli {
 enum Commands {
     /// Detect OS/distro and install dependencies
     Install {
-        /// Actually run commands (otherwise just print them)
         #[arg(long)]
         execute: bool,
     },
 
     /// Run full pipeline: specs + benchmarks + CSV + sync
     Run {
-        /// Google Sheets ID
         #[arg(long)]
         sheet_id: String,
-        /// Google Drive folder ID
         #[arg(long)]
         drive_folder_id: String,
-        /// Path to output CSV file
         #[arg(long, default_value = "mj_benchmarks.csv")]
         csv_path: String,
-        /// Google OAuth client ID
         #[arg(long)]
         client_id: String,
-        /// Google OAuth client secret
         #[arg(long)]
         client_secret: String,
     },
 
-    /// Only detect OS/distro and print it
+    /// Only detect OS/distro
     Detect,
 
-    /// Only show what would be installed
+    /// Show planned install commands
     PlanInstall,
 }
 
@@ -66,26 +61,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     match cli.command {
         Commands::Detect => {
-            let platform = platform::detect_platform();
-            println!("Detected platform: {}", platform);
+            println!("Detected platform: {}", platform::detect_platform());
         }
 
         Commands::PlanInstall => {
-            let platform = platform::detect_platform();
-            println!("Detected platform: {}", platform);
-            println!("Planned install commands:");
-            install::print_install_plan(platform);
+            let p = platform::detect_platform();
+            println!("Detected platform: {}", p);
+            install::print_install_plan(p);
         }
 
         Commands::Install { execute } => {
-            let platform = platform::detect_platform();
-            println!("Detected platform: {}", platform);
+            let p = platform::detect_platform();
+            println!("Detected platform: {}", p);
             if execute {
-                println!("Executing install commands...");
-                install::run_install(platform)?;
+                install::run_install(p)?;
             } else {
-                println!("(dry run) Planned install commands:");
-                install::print_install_plan(platform);
+                install::print_install_plan(p);
             }
         }
 
@@ -122,66 +113,61 @@ async fn run_full_pipeline(
 
     // 1. Collect device specs
     println!("== Collecting device specs ==");
-    let specs: DeviceSpecs = match platform {
+    let specs = match platform {
         Platform::DebianLike
         | Platform::FedoraLike
         | Platform::ArchLike
-        | Platform::Nix => {
-            println!("Using Linux specs collector");
-            specs_linux::collect_linux_specs()
-        }
+        | Platform::Nix => specs_linux::collect_linux_specs(),
 
-        Platform::MacOs => {
-            println!("Using macOS specs collector");
-            specs_macos::collect_macos_specs()
-        }
+        Platform::MacOs => specs_macos::collect_macos_specs(),
 
         Platform::FreeBsd | Platform::NetBsd | Platform::OpenBsd => {
-            println!("Using BSD specs collector");
             specs_bsd::collect_bsd_specs()
         }
 
-        Platform::Windows => {
-            println!("Using Windows specs collector");
-            specs_windows::collect_windows_specs()
-        }
+        Platform::Windows => specs_windows::collect_windows_specs(),
 
         Platform::Unknown => {
-            println!("Unknown platform; falling back to dummy specs");
+            println!("Unknown platform; using dummy specs");
             DeviceSpecs::dummy()
         }
     };
-    println!("Specs collected: {:?}", specs);
+    println!("Specs collected.");
 
     // 2. Run PTS benchmarks
     println!("== Running PTS benchmarks ==");
     pts::ensure_pts_installed()?;
     pts::ensure_suite_exists()?;
-    let bench: BenchResults = pts::run_suite()?;
-    println!("Bench results: {:?}", bench);
+    let mut bench = pts::run_suite()?;
+    println!("PTS results collected.");
 
-    // 3. Build CSV row
+    // 3. Browser benchmarks
+    println!("== Running browser benchmarks ==");
+    let browser = browser_bench::run_browser_benchmarks().await;
+    println!("Browser results: {:?}", browser);
+
+    bench.speedometer_score = browser.speedometer;
+    bench.jetstream_score = browser.jetstream;
+    bench.motionmark_score = browser.motionmark;
+
+    // 4. Build CSV row
     println!("== Building CSV row ==");
     let row = csv_row::build_csv_row(&specs, &bench);
-    println!("CSV row:\n{}", row);
 
-    // 4. Save to CSV
+    // 5. Save CSV
     println!("== Writing CSV to {} ==", csv_path);
     csv_row::append_to_csv(csv_path, &row)?;
 
-    // 5. Google OAuth
+    // 6. Google OAuth
     println!("== Authenticating with Google ==");
     let token = google_auth::get_token(client_id, client_secret).await?;
 
-    // 6. Append to Google Sheets
-    println!("== Uploading row to Google Sheets ({}) ==", sheet_id);
+    // 7. Append to Google Sheets
+    println!("== Uploading row to Google Sheets ==");
     google_sheets::append_row(sheet_id, &row, &token).await?;
 
-    // 7. Upload CSV to Google Drive
-    println!(
-        "== Uploading CSV ({}) to Google Drive folder ({}) ==",
-        csv_path, drive_folder_id
-    );
+    // 8. Upload CSV to Google Drive
+    println!("== Uploading CSV to Google Drive ==");
     google_drive::upload_csv(drive_folder_id, csv_path, &token).await?;
 
     println!("== Pipeline complete ==");
