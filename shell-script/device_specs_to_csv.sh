@@ -1,10 +1,28 @@
 #!/usr/bin/env bash
-# MJ Device Spec Auto-Collector → CSV Appender
-# Appends a single row into your master device matrix CSV
+# MJ Device Spec Auto-Collector → CSV Row Output
+# Outputs ONE CSV row (no header), ready for pipeline merging
 
 set -euo pipefail
 
-CSV_FILE="$HOME/device_specs.csv"
+# --- Parse arguments ---
+OUTPUT_FILE=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --output)
+            OUTPUT_FILE="$2"
+            shift 2
+            ;;
+        *)
+            echo "Unknown argument: $1"
+            exit 1
+            ;;
+    esac
+done
+
+if [[ -z "$OUTPUT_FILE" ]]; then
+    echo "Usage: $0 --output <file>"
+    exit 1
+fi
 
 # Helper: safe command execution
 get() {
@@ -12,11 +30,6 @@ get() {
     OUTPUT=$(bash -c "$CMD" 2>/dev/null | head -n 1 | xargs)
     [ -z "$OUTPUT" ] && echo "" || echo "$OUTPUT"
 }
-
-# Ensure CSV header exists
-if [ ! -f "$CSV_FILE" ]; then
-    echo "Brand & Model,Launch Date,Price,CPU & Performance,Codename,CPU Speed,x86-64 Level,GPU,AI & NPU,RAM & Storage,Connectivity,Audio Ports,NFC & Wallet,Battery,Power & Charging,Qi Wireless Charging,Form Factor,Dimensions & Weight,Display,Build & Durability,Cameras,Biometrics & Health,Regional,Software & Updates,Color,Upgrade Options,Ecosystem Lock-in,Wear Detection,Touch Control,Storage Case,Special Features,Official Site,Info Links,BIOS/Boot Key" > "$CSV_FILE"
-fi
 
 # --- Auto-detected fields ---
 BRAND_MODEL=$(get "hostnamectl | grep 'Model' | cut -d: -f2")
@@ -73,10 +86,10 @@ SPECIAL=""
 OFFICIAL=""
 LINKS=""
 
-# --- Compose CSV row ---
+# --- Compose CSV row in EXACT schema order ---
 ROW="$BRAND_MODEL,$LAUNCH_DATE,$PRICE,$CPU,$CODENAME,$CPU_SPEED,$X86_LEVEL,$GPU,$AI_NPU,$RAM / $STORAGE,$CONNECTIVITY,$AUDIO_PORTS,$NFC,$BATTERY,$POWER_SUPPLY,$QI,$FORM_FACTOR,$DIMENSIONS,$DISPLAY,$BUILD,$CAMERAS,$BIOMETRICS,$REGIONAL,$DISTRO ($KERNEL),$COLOR,$UPGRADE_OPTIONS,$ECOSYSTEM,$WEAR_DETECTION,$TOUCH_CONTROL,$STORAGE_CASE,$SPECIAL,$OFFICIAL,$LINKS,$BIOS_KEY"
 
-# Append row
-echo "$ROW" >> "$CSV_FILE"
+# Write to output file
+echo "$ROW" > "$OUTPUT_FILE"
 
-echo "✅ Device specs appended to $CSV_FILE"
+echo "✅ Device specs row written to $OUTPUT_FILE"
