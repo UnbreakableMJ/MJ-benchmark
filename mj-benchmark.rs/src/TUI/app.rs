@@ -75,12 +75,26 @@ async fn run_loop<B: ratatui::backend::Backend>(
 
     state.log(format!("Platform: {}", platform));
 
-    // Authenticate early
     state.log("Authenticating with Google…");
-    let token = google_auth::get_token(client_id, client_secret).await?;
-    state.log("Google authentication successful.");
+    let token = match google_auth::get_token(client_id, client_secret).await {
+        Ok(t) => t,
+        Err(e) => {
+            state.log(format!("ERROR: {}", e));
+            state.trigger_failure(PipelineStep::Specs, e.to_string());
+            state.set_step(PipelineStep::Done);
+            pipeline_done = true;
+            // Continue to UI loop so user can read error
+            loop {
+                terminal.draw(|f| draw(f, &state))?;
+                if let Some(TuiEvent::Key(KeyCode::Char('q') | KeyCode::Esc)) =
+                    poll_event(tick_rate)
+                {
+                    return Ok(());
+                }
+            }
+        }
+    };
 
-    // Start first step timer
     state.start_step_timer();
 
     loop {
@@ -102,9 +116,22 @@ async fn run_loop<B: ratatui::backend::Backend>(
 
                 PipelineStep::Pts => {
                     state.log("Running PTS benchmarks…");
-                    pts::ensure_pts_installed()?;
-                    pts::ensure_suite_exists()?;
-                    state.bench = Some(pts::run_suite()?);
+
+                    let result: Result<(), Box<dyn Error>> = (|| {
+                        pts::ensure_pts_installed()?;
+                        pts::ensure_suite_exists()?;
+                        state.bench = Some(pts::run_suite()?);
+                        Ok(())
+                    })();
+
+                    if let Err(e) = result {
+                        state.log(format!("ERROR: {}", e));
+                        state.stop_step_timer();
+                        state.trigger_failure(PipelineStep::Pts, e.to_string());
+                        state.set_step(PipelineStep::Done);
+                        pipeline_done = true;
+                        continue;
+                    }
 
                     state.stop_step_timer();
                     state.trigger_success(PipelineStep::Pts);
@@ -116,12 +143,21 @@ async fn run_loop<B: ratatui::backend::Backend>(
 
                 PipelineStep::Browser => {
                     state.log("Running browser benchmarks…");
-                    let browser = browser_bench::run_browser_benchmarks().await;
+
+                    let result = browser_bench::run_browser_benchmarks().await;
 
                     if let Some(b) = &mut state.bench {
-                        b.speedometer_score = browser.speedometer;
-                        b.jetstream_score = browser.jetstream;
-                        b.motionmark_score = browser.motionmark;
+                        b.speedometer_score = result.speedometer;
+                        b.jetstream_score = result.jetstream;
+                        b.motionmark_score = result.motionmark;
+                    } else {
+                        let msg = "Missing benchmark state";
+                        state.log(format!("ERROR: {}", msg));
+                        state.stop_step_timer();
+                        state.trigger_failure(PipelineStep::Browser, msg);
+                        state.set_step(PipelineStep::Done);
+                        pipeline_done = true;
+                        continue;
                     }
 
                     state.stop_step_timer();
@@ -135,13 +171,24 @@ async fn run_loop<B: ratatui::backend::Backend>(
                 PipelineStep::Csv => {
                     state.log("Building CSV and syncing Google Sheets…");
 
-                    let row = csv_row::build_csv_row(
-                        state.specs.as_ref().unwrap(),
-                        state.bench.as_ref().unwrap(),
-                    );
+                    let result: Result<(), Box<dyn Error>> = (|| {
+                        let row = csv_row::build_csv_row(
+                            state.specs.as_ref().unwrap(),
+                            state.bench.as_ref().unwrap(),
+                        );
+                        csv_row::append_to_csv(csv_path, &row)?;
+                        google_sheets::append_row(sheet_id, &row, &token).await?;
+                        Ok(())
+                    })();
 
-                    csv_row::append_to_csv(csv_path, &row)?;
-                    google_sheets::append_row(sheet_id, &row, &token).await?;
+                    if let Err(e) = result {
+                        state.log(format!("ERROR: {}", e));
+                        state.stop_step_timer();
+                        state.trigger_failure(PipelineStep::Csv, e.to_string());
+                        state.set_step(PipelineStep::Done);
+                        pipeline_done = true;
+                        continue;
+                    }
 
                     state.stop_step_timer();
                     state.trigger_success(PipelineStep::Csv);
@@ -153,7 +200,17 @@ async fn run_loop<B: ratatui::backend::Backend>(
 
                 PipelineStep::Sheets => {
                     state.log("Uploading CSV to Google Drive…");
-                    google_drive::upload_csv(drive_folder_id, csv_path, &token).await?;
+
+                    if let Err(e) =
+                        google_drive::upload_csv(drive_folder_id, csv_path, &token).await
+                    {
+                        state.log(format!("ERROR: {}", e));
+                        state.stop_step_timer();
+                        state.trigger_failure(PipelineStep::Sheets, e.to_string());
+                        state.set_step(PipelineStep::Done);
+                        pipeline_done = true;
+                        continue;
+                    }
 
                     state.stop_step_timer();
                     state.trigger_success(PipelineStep::Sheets);
@@ -186,10 +243,10 @@ async fn run_loop<B: ratatui::backend::Backend>(
                     state.tick_progress_bar(20);
                     state.tick_step_timer();
                     state.tick_success_flash();
+                    state.tick_failure_flash();
                 }
 
                 TuiEvent::Key(key) => {
-                    // Search mode input
                     if state.in_search_mode {
                         match key {
                             KeyCode::Esc => state.cancel_search(),
@@ -202,40 +259,18 @@ async fn run_loop<B: ratatui::backend::Backend>(
                     }
 
                     match key {
-                        // Quit
                         KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
 
-                        // Vim :q
-                        KeyCode::Char(':') => {
-                            if let Some(TuiEvent::Key(KeyCode::Char('q'))) =
-                                poll_event(Duration::from_millis(50))
-                            {
-                                return Ok(());
-                            }
-                        }
-
-                        // Vim ZZ
-                        KeyCode::Char('Z') => {
-                            if let Some(TuiEvent::Key(KeyCode::Char('Z'))) =
-                                poll_event(Duration::from_millis(50))
-                            {
-                                return Ok(());
-                            }
-                        }
-
-                        // Scroll
                         KeyCode::Up | KeyCode::Char('k') => state.scroll_up(),
                         KeyCode::Down | KeyCode::Char('j') => state.scroll_down(),
                         KeyCode::PageUp => state.scroll_page_up(),
                         KeyCode::PageDown => state.scroll_page_down(),
 
-                        // Half-page scroll
                         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) =>
                             state.scroll_half_page_up(),
                         KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) =>
                             state.scroll_half_page_down(),
 
-                        // Jump
                         KeyCode::Char('g') => {
                             if let Some(TuiEvent::Key(KeyCode::Char('g'))) =
                                 poll_event(Duration::from_millis(50))
@@ -245,11 +280,9 @@ async fn run_loop<B: ratatui::backend::Backend>(
                         }
                         KeyCode::Char('G') => state.scroll_to_bottom(),
 
-                        // Panel switch
                         KeyCode::Tab | KeyCode::Char('h') | KeyCode::Char('l') =>
                             state.toggle_panel(),
 
-                        // Search
                         KeyCode::Char('/') => state.start_search(),
                         KeyCode::Char('n') => state.search_next(),
                         KeyCode::Char('N') => state.search_prev(),
