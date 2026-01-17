@@ -61,3 +61,14 @@ Use the universal installer:
 ```bash
 chmod +x install_MJ_bench_stack.sh
 ./install_MJ_bench_stack.sh
+
+---
+
+## 📝 License
+
+This project is licensed under the **GNU General Public License v3.0 or later (GPL‑3.0+)**.
+
+You may redistribute and/or modify this software under the terms of the GNU GPL as published by the Free Software Foundation, either version 3 of the License or (at your option) any later version.
+
+A copy of the license is available at:  
+https://www.gnu.org/licenses/gpl-3.0.html
